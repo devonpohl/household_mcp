@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Household Tasks</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #f5f5f5;
+    color: #222;
+    max-width: 600px;
+    margin: 0 auto;
+    padding: 16px;
+  }
+  h1 { font-size: 1.4em; margin-bottom: 12px; }
+  h2 { font-size: 1.1em; margin: 20px 0 8px; color: #555; }
+
+  /* Task cards */
+  .task {
+    background: #fff;
+    border-radius: 8px;
+    padding: 12px 14px;
+    margin-bottom: 8px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+  }
+  .task.complete { opacity: 0.55; }
+  .task-body { flex: 1; min-width: 0; }
+  .task-title { font-weight: 600; }
+  .task-meta { font-size: 0.82em; color: #888; margin-top: 2px; }
+  .task-notes { font-size: 0.85em; color: #666; margin-top: 4px; }
+
+  /* Buttons */
+  .btn {
+    border: none; border-radius: 6px; padding: 6px 12px;
+    font-size: 0.85em; cursor: pointer; white-space: nowrap;
+  }
+  .btn-done { background: #4caf50; color: #fff; }
+  .btn-done:hover { background: #388e3c; }
+  .btn-edit { background: #e0e0e0; color: #333; }
+  .btn-edit:hover { background: #bdbdbd; }
+  .btn-delete { background: none; color: #c62828; font-size: 0.8em; padding: 4px 8px; }
+  .btn-delete:hover { background: #ffebee; }
+  .btn-primary { background: #1976d2; color: #fff; padding: 8px 16px; font-size: 1em; }
+  .btn-primary:hover { background: #1565c0; }
+  .btn-cancel { background: #e0e0e0; color: #333; padding: 8px 16px; font-size: 1em; }
+
+  .task-actions { display: flex; gap: 6px; align-items: center; flex-shrink: 0; }
+
+  /* Form */
+  .form-overlay {
+    display: none;
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.3);
+    z-index: 10;
+    justify-content: center; align-items: center;
+  }
+  .form-overlay.open { display: flex; }
+  .form-box {
+    background: #fff; border-radius: 12px; padding: 20px;
+    width: 90%; max-width: 400px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+  }
+  .form-box h2 { margin: 0 0 14px; color: #222; }
+  .form-box label { display: block; font-size: 0.85em; font-weight: 600; margin: 10px 0 4px; }
+  .form-box input, .form-box select, .form-box textarea {
+    width: 100%; padding: 8px 10px; border: 1px solid #ccc; border-radius: 6px;
+    font-size: 0.95em; font-family: inherit;
+  }
+  .form-box textarea { resize: vertical; min-height: 60px; }
+  .form-actions { display: flex; gap: 8px; margin-top: 16px; justify-content: flex-end; }
+
+  /* Add button */
+  .fab {
+    position: fixed; bottom: 24px; right: 24px;
+    width: 56px; height: 56px; border-radius: 50%;
+    background: #1976d2; color: #fff; border: none;
+    font-size: 28px; cursor: pointer;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .fab:hover { background: #1565c0; }
+
+  .empty { text-align: center; color: #999; padding: 40px 0; }
+</style>
+</head>
+<body>
+
+<h1>Household Tasks</h1>
+<div id="app"><div class="empty">Loading…</div></div>
+
+<!-- Floating add button -->
+<button class="fab" onclick="openForm()" title="Add task">+</button>
+
+<!-- Add / Edit form -->
+<div class="form-overlay" id="formOverlay">
+  <div class="form-box">
+    <h2 id="formTitle">Add Task</h2>
+    <input type="hidden" id="editId">
+    <label for="fTitle">Title</label>
+    <input type="text" id="fTitle" placeholder="e.g. Clean bathroom">
+    <label for="fCadence">Cadence</label>
+    <select id="fCadence">
+      <option value="weekly">Weekly</option>
+      <option value="monthly">Monthly</option>
+      <option value="quarterly">Quarterly</option>
+    </select>
+    <label for="fNotes">Notes</label>
+    <textarea id="fNotes" placeholder="Optional details…"></textarea>
+    <div class="form-actions">
+      <button class="btn btn-cancel" onclick="closeForm()">Cancel</button>
+      <button class="btn btn-primary" onclick="submitForm()">Save</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const API = window.location.origin + '/api';
+
+async function loadTasks() {
+  const res = await fetch(API + '/tasks');
+  const tasks = await res.json();
+  render(tasks);
+}
+
+function render(tasks) {
+  const app = document.getElementById('app');
+  if (!tasks.length) {
+    app.innerHTML = '<div class="empty">No tasks yet. Tap + to add one.</div>';
+    return;
+  }
+
+  const todo = tasks.filter(t => t.status === 'To Do');
+  const done = tasks.filter(t => t.status === 'Complete');
+
+  let html = '';
+  if (todo.length) {
+    html += '<h2>To Do</h2>';
+    todo.forEach(t => html += taskCard(t, false));
+  }
+  if (done.length) {
+    html += '<h2>Complete</h2>';
+    done.forEach(t => html += taskCard(t, true));
+  }
+  app.innerHTML = html;
+}
+
+function taskCard(t, complete) {
+  const cls = complete ? 'task complete' : 'task';
+  const notes = t.notes ? `<div class="task-notes">${esc(t.notes)}</div>` : '';
+  const lastDone = t.last_completed ? t.last_completed.slice(0, 10) : 'never';
+  const doneBtn = complete ? '' :
+    `<button class="btn btn-done" onclick="completeTask('${t.id}')">Done</button>`;
+  return `
+    <div class="${cls}">
+      <div class="task-body">
+        <div class="task-title">${esc(t.title)}</div>
+        <div class="task-meta">${t.cadence} · last: ${lastDone}</div>
+        ${notes}
+      </div>
+      <div class="task-actions">
+        ${doneBtn}
+        <button class="btn btn-edit" onclick="openEdit('${t.id}')">Edit</button>
+        <button class="btn btn-delete" onclick="deleteTask('${t.id}', '${esc(t.title)}')">✕</button>
+      </div>
+    </div>`;
+}
+
+function esc(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+async function completeTask(id) {
+  await fetch(API + '/tasks/' + id + '/complete', { method: 'POST' });
+  loadTasks();
+}
+
+async function deleteTask(id, title) {
+  if (!confirm('Delete "' + title + '"?')) return;
+  await fetch(API + '/tasks/' + id, { method: 'DELETE' });
+  loadTasks();
+}
+
+// --- Form ---
+let allTasks = [];
+
+function openForm() {
+  document.getElementById('formTitle').textContent = 'Add Task';
+  document.getElementById('editId').value = '';
+  document.getElementById('fTitle').value = '';
+  document.getElementById('fCadence').value = 'weekly';
+  document.getElementById('fNotes').value = '';
+  document.getElementById('formOverlay').classList.add('open');
+}
+
+async function openEdit(id) {
+  const res = await fetch(API + '/tasks');
+  const tasks = await res.json();
+  const t = tasks.find(x => x.id === id);
+  if (!t) return;
+
+  document.getElementById('formTitle').textContent = 'Edit Task';
+  document.getElementById('editId').value = t.id;
+  document.getElementById('fTitle').value = t.title;
+  document.getElementById('fCadence').value = t.cadence;
+  document.getElementById('fNotes').value = t.notes || '';
+  document.getElementById('formOverlay').classList.add('open');
+}
+
+function closeForm() {
+  document.getElementById('formOverlay').classList.remove('open');
+}
+
+async function submitForm() {
+  const editId = document.getElementById('editId').value;
+  const body = {
+    title: document.getElementById('fTitle').value.trim(),
+    cadence: document.getElementById('fCadence').value,
+    notes: document.getElementById('fNotes').value.trim() || null,
+  };
+  if (!body.title) { alert('Title is required'); return; }
+
+  if (editId) {
+    await fetch(API + '/tasks/' + editId, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  } else {
+    await fetch(API + '/tasks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  }
+  closeForm();
+  loadTasks();
+}
+
+// Close form on overlay click
+document.getElementById('formOverlay').addEventListener('click', e => {
+  if (e.target === e.currentTarget) closeForm();
+});
+
+loadTasks();
+</script>
+</body>
+</html>

@@ -28,6 +28,7 @@
     align-items: center;
     gap: 10px;
   }
+  .task.once { background: #e8f0fe; }
   .task.complete { opacity: 0.55; }
   .task-body { flex: 1; min-width: 0; }
   .task-title { font-weight: 600; }
@@ -132,6 +133,7 @@
     <input type="text" id="fTitle" placeholder="e.g. Clean bathroom">
     <label for="fCadence">Cadence</label>
     <select id="fCadence">
+      <option value="once">Once</option>
       <option value="weekly">Weekly</option>
       <option value="monthly">Monthly</option>
       <option value="quarterly">Quarterly</option>
@@ -184,7 +186,9 @@ function render(tasks) {
 }
 
 function taskCard(t, complete) {
-  const cls = complete ? 'task complete' : 'task';
+  let cls = 'task';
+  if (complete) cls += ' complete';
+  if (t.cadence === 'once') cls += ' once';
   const notes = t.notes ? `<div class="task-notes">${esc(t.notes)}</div>` : '';
   const lastDone = t.last_completed ? t.last_completed.slice(0, 10) : 'never';
   const doneBtn = complete ? '' :
@@ -241,7 +245,7 @@ function openForm() {
   document.getElementById('formTitle').textContent = 'Add Task';
   document.getElementById('editId').value = '';
   document.getElementById('fTitle').value = '';
-  document.getElementById('fCadence').value = 'weekly';
+  document.getElementById('fCadence').value = 'once';
   document.getElementById('fNotes').value = '';
   document.getElementById('formOverlay').classList.add('open');
 }

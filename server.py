@@ -24,6 +24,8 @@ CADENCE_DAYS = {
     "quarterly": 90,
 }
 
+VALID_CADENCES = list(CADENCE_DAYS.keys()) + ["once"]
+
 
 def _get_db() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
@@ -39,7 +41,7 @@ def _init_db() -> None:
         CREATE TABLE IF NOT EXISTS tasks (
             id TEXT PRIMARY KEY,
             title TEXT NOT NULL,
-            cadence TEXT NOT NULL CHECK(cadence IN ('weekly', 'monthly', 'quarterly')),
+            cadence TEXT CHECK(cadence IN ('weekly', 'monthly', 'quarterly') OR cadence IS NULL),
             notes TEXT,
             last_completed TEXT,
             created_at TEXT NOT NULL
@@ -60,6 +62,9 @@ def _now_iso() -> str:
 
 
 def _task_status(row: sqlite3.Row) -> str:
+    if row["cadence"] is None:
+        # One-time task: complete once done, to do otherwise
+        return "Complete" if row["last_completed"] else "To Do"
     if row["last_completed"] is None:
         return "To Do"
     last = datetime.fromisoformat(row["last_completed"])
@@ -69,17 +74,32 @@ def _task_status(row: sqlite3.Row) -> str:
     return "Complete" if last >= threshold else "To Do"
 
 
+def _is_recurring(row) -> bool:
+    """Check if a task (row or dict) is recurring."""
+    cadence = row["cadence"] if hasattr(row, "keys") else row.get("cadence")
+    return cadence is not None
+
+
 def _format_task(row: sqlite3.Row) -> dict:
     status = _task_status(row)
     return {
         "id": row["id"],
         "title": row["title"],
-        "cadence": row["cadence"],
+        "cadence": row["cadence"] or "once",
         "notes": row["notes"] or "",
         "status": status,
         "last_completed": row["last_completed"],
         "created_at": row["created_at"],
     }
+
+
+def _sort_tasks(tasks: list[dict]) -> list[dict]:
+    """Sort: To Do before Complete, recurring before one-time, then by title."""
+    def sort_key(t):
+        status_ord = 0 if t["status"] == "To Do" else 1
+        recurring_ord = 0 if t["cadence"] != "once" else 1
+        return (status_ord, recurring_ord, t["title"])
+    return sorted(tasks, key=sort_key)
 
 
 # ---------------------------------------------------------------------------
@@ -89,7 +109,7 @@ def _format_task(row: sqlite3.Row) -> dict:
 def list_tasks() -> str:
     """List all household tasks with their current status.
 
-    Returns tasks sorted with 'To Do' first, then 'Complete'.
+    Returns tasks sorted: To Do first (recurring above one-time), then Complete.
     Status is computed from last_completed date and cadence.
     """
     conn = _get_db()
@@ -99,8 +119,7 @@ def list_tasks() -> str:
     if not rows:
         return "No tasks yet. Use add_task to create one."
 
-    tasks = [_format_task(r) for r in rows]
-    tasks.sort(key=lambda t: (0 if t["status"] == "To Do" else 1, t["title"]))
+    tasks = _sort_tasks([_format_task(r) for r in rows])
 
     lines = []
     current_status = None
@@ -117,23 +136,24 @@ def list_tasks() -> str:
 
 
 @mcp.tool()
-def add_task(title: str, cadence: str, notes: Optional[str] = None) -> str:
-    """Add a new recurring household task.
+def add_task(title: str, cadence: str = "once", notes: Optional[str] = None) -> str:
+    """Add a new household task.
 
     Args:
         title: Name of the task (e.g. "Clean gutters")
-        cadence: How often — one of: weekly, monthly, quarterly
+        cadence: How often — one of: weekly, monthly, quarterly, once. Defaults to once.
         notes: Optional free text notes about the task
     """
     cadence = cadence.lower().strip()
-    if cadence not in CADENCE_DAYS:
-        return f"Invalid cadence '{cadence}'. Must be one of: weekly, monthly, quarterly."
+    if cadence not in VALID_CADENCES:
+        return f"Invalid cadence '{cadence}'. Must be one of: {', '.join(VALID_CADENCES)}."
 
+    db_cadence = None if cadence == "once" else cadence
     task_id = str(uuid.uuid4())[:8]
     conn = _get_db()
     conn.execute(
         "INSERT INTO tasks (id, title, cadence, notes, created_at) VALUES (?, ?, ?, ?, ?)",
-        (task_id, title.strip(), cadence, notes, _now_iso()),
+        (task_id, title.strip(), db_cadence, notes, _now_iso()),
     )
     conn.commit()
     conn.close()
@@ -152,13 +172,13 @@ def edit_task(
     Args:
         task_id: The task ID (use list_tasks to find it)
         title: New title
-        cadence: New cadence — one of: weekly, monthly, quarterly
+        cadence: New cadence — one of: weekly, monthly, quarterly, once
         notes: New notes (free text)
     """
     if cadence is not None:
         cadence = cadence.lower().strip()
-        if cadence not in CADENCE_DAYS:
-            return f"Invalid cadence '{cadence}'. Must be one of: weekly, monthly, quarterly."
+        if cadence not in VALID_CADENCES:
+            return f"Invalid cadence '{cadence}'. Must be one of: {', '.join(VALID_CADENCES)}."
 
     conn = _get_db()
     row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
@@ -173,7 +193,7 @@ def edit_task(
         values.append(title.strip())
     if cadence is not None:
         updates.append("cadence = ?")
-        values.append(cadence)
+        values.append(None if cadence == "once" else cadence)
     if notes is not None:
         updates.append("notes = ?")
         values.append(notes)
@@ -196,6 +216,9 @@ def edit_task(
 def complete_task(task_id: str) -> str:
     """Mark a task as complete. Sets last_completed to now.
 
+    For recurring tasks, it will move back to To Do after the cadence period.
+    For one-time tasks, it stays complete permanently.
+
     Args:
         task_id: The task ID (use list_tasks to find it)
     """
@@ -209,6 +232,9 @@ def complete_task(task_id: str) -> str:
     conn.execute("UPDATE tasks SET last_completed = ? WHERE id = ?", (now, task_id))
     conn.commit()
     conn.close()
+
+    if row["cadence"] is None:
+        return f"Completed '{row['title']}' (one-time task — done!)."
     return f"Completed '{row['title']}'. It'll move back to To Do after one {row['cadence']} cycle."
 
 

@@ -22,8 +22,10 @@ from server import (
     _format_task,
     _get_db,
     _now_iso,
+    _sort_tasks,
     mcp,
     CADENCE_DAYS,
+    VALID_CADENCES,
 )
 
 
@@ -44,27 +46,27 @@ async def api_list_tasks(request: Request) -> JSONResponse:
     conn = _get_db()
     rows = conn.execute("SELECT * FROM tasks ORDER BY title").fetchall()
     conn.close()
-    tasks = [_format_task(r) for r in rows]
-    tasks.sort(key=lambda t: (0 if t["status"] == "To Do" else 1, t["title"]))
+    tasks = _sort_tasks([_format_task(r) for r in rows])
     return JSONResponse(tasks)
 
 
 async def api_add_task(request: Request) -> JSONResponse:
     body = await request.json()
     title = body.get("title", "").strip()
-    cadence = body.get("cadence", "").lower().strip()
+    cadence = body.get("cadence", "once").lower().strip()
     notes = body.get("notes")
 
     if not title:
         return JSONResponse({"error": "title is required"}, status_code=400)
-    if cadence not in CADENCE_DAYS:
-        return JSONResponse({"error": f"cadence must be one of: {', '.join(CADENCE_DAYS)}"}, status_code=400)
+    if cadence not in VALID_CADENCES:
+        return JSONResponse({"error": f"cadence must be one of: {', '.join(VALID_CADENCES)}"}, status_code=400)
 
+    db_cadence = None if cadence == "once" else cadence
     task_id = str(uuid.uuid4())[:8]
     conn = _get_db()
     conn.execute(
         "INSERT INTO tasks (id, title, cadence, notes, created_at) VALUES (?, ?, ?, ?, ?)",
-        (task_id, title, cadence, notes, _now_iso()),
+        (task_id, title, db_cadence, notes, _now_iso()),
     )
     conn.commit()
     conn.close()
@@ -86,9 +88,11 @@ async def api_edit_task(request: Request) -> JSONResponse:
     for field in ("title", "cadence", "notes"):
         if field in body and body[field] is not None:
             val = body[field].strip() if isinstance(body[field], str) else body[field]
-            if field == "cadence" and val not in CADENCE_DAYS:
-                conn.close()
-                return JSONResponse({"error": f"cadence must be one of: {', '.join(CADENCE_DAYS)}"}, status_code=400)
+            if field == "cadence":
+                if val not in VALID_CADENCES:
+                    conn.close()
+                    return JSONResponse({"error": f"cadence must be one of: {', '.join(VALID_CADENCES)}"}, status_code=400)
+                val = None if val == "once" else val
             updates.append(f"{field} = ?")
             values.append(val)
 

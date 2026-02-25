@@ -25,7 +25,7 @@
     margin-bottom: 8px;
     box-shadow: 0 1px 3px rgba(0,0,0,0.08);
     display: flex;
-    align-items: flex-start;
+    align-items: center;
     gap: 10px;
   }
   .task.complete { opacity: 0.55; }
@@ -41,15 +41,42 @@
   }
   .btn-done { background: #4caf50; color: #fff; }
   .btn-done:hover { background: #388e3c; }
-  .btn-edit { background: #e0e0e0; color: #333; }
-  .btn-edit:hover { background: #bdbdbd; }
-  .btn-delete { background: none; color: #c62828; font-size: 0.8em; padding: 4px 8px; }
-  .btn-delete:hover { background: #ffebee; }
   .btn-primary { background: #1976d2; color: #fff; padding: 8px 16px; font-size: 1em; }
   .btn-primary:hover { background: #1565c0; }
   .btn-cancel { background: #e0e0e0; color: #333; padding: 8px 16px; font-size: 1em; }
 
-  .task-actions { display: flex; gap: 6px; align-items: center; flex-shrink: 0; }
+  .task-actions { display: flex; gap: 6px; align-items: center; flex-shrink: 0; align-self: stretch; }
+  .btn-done { align-self: stretch; display: flex; align-items: center; }
+
+  /* Overflow menu */
+  .menu-wrap { position: relative; }
+  .menu-btn {
+    background: none; border: none; font-size: 1.3em; cursor: pointer;
+    padding: 4px 8px; color: #888; line-height: 1;
+  }
+  .menu-btn:hover { color: #333; }
+  .menu-dropdown {
+    display: none;
+    position: absolute;
+    right: 0; top: 100%;
+    background: #fff;
+    border-radius: 8px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+    min-width: 120px;
+    z-index: 20;
+    overflow: hidden;
+  }
+  .menu-dropdown.open { display: block; }
+  .menu-item {
+    display: block; width: 100%;
+    padding: 10px 14px;
+    border: none; background: none;
+    text-align: left; font-size: 0.9em;
+    cursor: pointer; color: #333;
+  }
+  .menu-item:hover { background: #f0f0f0; }
+  .menu-item.danger { color: #c62828; }
+  .menu-item.danger:hover { background: #ffebee; }
 
   /* Form */
   .form-overlay {
@@ -121,6 +148,13 @@
 <script>
 const API = window.location.origin + '/api';
 
+// --- Close any open menu when tapping elsewhere ---
+document.addEventListener('click', e => {
+  if (!e.target.closest('.menu-wrap')) {
+    document.querySelectorAll('.menu-dropdown.open').forEach(m => m.classList.remove('open'));
+  }
+});
+
 async function loadTasks() {
   const res = await fetch(API + '/tasks');
   const tasks = await res.json();
@@ -164,10 +198,25 @@ function taskCard(t, complete) {
       </div>
       <div class="task-actions">
         ${doneBtn}
-        <button class="btn btn-edit" onclick="openEdit('${t.id}')">Edit</button>
-        <button class="btn btn-delete" onclick="deleteTask('${t.id}', '${esc(t.title)}')">✕</button>
+        <div class="menu-wrap">
+          <button class="menu-btn" onclick="toggleMenu(event)">⋯</button>
+          <div class="menu-dropdown">
+            <button class="menu-item" onclick="openEdit('${t.id}')">Edit</button>
+            <button class="menu-item danger" onclick="deleteTask('${t.id}', '${esc(t.title)}')">Delete</button>
+          </div>
+        </div>
       </div>
     </div>`;
+}
+
+function toggleMenu(e) {
+  e.stopPropagation();
+  const dropdown = e.target.closest('.menu-wrap').querySelector('.menu-dropdown');
+  // Close all other menus first
+  document.querySelectorAll('.menu-dropdown.open').forEach(m => {
+    if (m !== dropdown) m.classList.remove('open');
+  });
+  dropdown.classList.toggle('open');
 }
 
 function esc(s) {
@@ -188,8 +237,6 @@ async function deleteTask(id, title) {
 }
 
 // --- Form ---
-let allTasks = [];
-
 function openForm() {
   document.getElementById('formTitle').textContent = 'Add Task';
   document.getElementById('editId').value = '';
@@ -200,6 +247,9 @@ function openForm() {
 }
 
 async function openEdit(id) {
+  // Close the menu
+  document.querySelectorAll('.menu-dropdown.open').forEach(m => m.classList.remove('open'));
+
   const res = await fetch(API + '/tasks');
   const tasks = await res.json();
   const t = tasks.find(x => x.id === id);

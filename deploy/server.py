@@ -1,23 +1,19 @@
 """HTTP wrapper for household MCP server.
 
-Follows the Railway deployment pattern:
-1. PathRewriteMiddleware rewrites POST/GET/DELETE on / to /mcp
-2. HEAD / returns MCP-Protocol-Version header for Claude discovery
-3. streamable_http_app() is the BASE app; custom routes prepended
-4. JSON REST API at /api/* for the web UI
-5. Static file serving for the web UI
+FastMCP 3.x approach:
+1. http_app(path="/") serves MCP at root — no path rewrite middleware needed
+2. HEAD / handler returns MCP-Protocol-Version for Claude discovery
+3. JSON REST API at /api/* for the web UI
+4. Static serving for the web UI at /ui
 """
 
-import json
 import os
 import sys
+import uuid
 
-from starlette.middleware import Middleware
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, Response
 from starlette.routing import Route
-from starlette.staticfiles import StaticFiles
-from starlette.types import ASGIApp, Receive, Scope, Send
 
 # Add parent dir so we can import server module
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -29,25 +25,6 @@ from server import (
     mcp,
     CADENCE_DAYS,
 )
-
-import uuid
-
-# ---------------------------------------------------------------------------
-# MCP path rewrite middleware
-# ---------------------------------------------------------------------------
-class PathRewriteMiddleware:
-    """Rewrite / to /mcp for MCP JSON-RPC traffic.
-
-    Claude's connector sends POST / but the SDK serves at /mcp.
-    Only rewrites POST, GET, DELETE on / — leaves other paths alone.
-    """
-    def __init__(self, app: ASGIApp) -> None:
-        self.app = app
-
-    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] == "http" and scope["path"] == "/" and scope["method"] in ("POST", "GET", "DELETE"):
-            scope["path"] = "/mcp"
-        await self.app(scope, receive, send)
 
 
 # ---------------------------------------------------------------------------
@@ -163,9 +140,10 @@ async def serve_index(request: Request) -> HTMLResponse:
 # ---------------------------------------------------------------------------
 # Build the app
 # ---------------------------------------------------------------------------
-app = mcp.streamable_http_app()
+# http_app(path="/") serves MCP JSON-RPC at / — no rewrite needed
+app = mcp.http_app(path="/")
 
-# Prepend custom routes (order matters — checked before MCP routes)
+# Prepend custom routes (checked before MCP routes)
 custom_routes = [
     Route("/", head_root, methods=["HEAD"]),
     Route("/ui", serve_index, methods=["GET"]),
@@ -178,6 +156,3 @@ custom_routes = [
 
 for i, route in enumerate(custom_routes):
     app.router.routes.insert(i, route)
-
-# Add path rewrite middleware (for MCP traffic)
-app.add_middleware(PathRewriteMiddleware)

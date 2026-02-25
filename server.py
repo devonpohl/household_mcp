@@ -6,23 +6,12 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from mcp.server.transport_security import TransportSecuritySettings
 from fastmcp import FastMCP
 
 # ---------------------------------------------------------------------------
-# FastMCP constructor — allow remote host when deployed
+# FastMCP constructor
 # ---------------------------------------------------------------------------
-_allowed_host = os.environ.get("MCP_ALLOWED_HOST")
-if _allowed_host:
-    mcp = FastMCP(
-        "household",
-        transport_security=TransportSecuritySettings(
-            allowed_hosts=[_allowed_host, f"{_allowed_host}:*"],
-            allowed_origins=[f"https://{_allowed_host}"],
-        ),
-    )
-else:
-    mcp = FastMCP("household")
+mcp = FastMCP("household")
 
 # ---------------------------------------------------------------------------
 # Database setup
@@ -111,7 +100,6 @@ def list_tasks() -> str:
         return "No tasks yet. Use add_task to create one."
 
     tasks = [_format_task(r) for r in rows]
-    # Sort: To Do first
     tasks.sort(key=lambda t: (0 if t["status"] == "To Do" else 1, t["title"]))
 
     lines = []
@@ -264,7 +252,6 @@ def get_summary() -> str:
     lines = [f"**{len(todo)}** to do, **{len(done)}** complete ({len(tasks)} total)"]
 
     if todo:
-        # Find most overdue: longest since last_completed, or never completed
         def overdue_sort(t):
             if t["last_completed"] is None:
                 return datetime.min

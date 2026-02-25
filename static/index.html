@@ -13,9 +13,16 @@
     max-width: 600px;
     margin: 0 auto;
     padding: 16px;
+    -webkit-user-select: none; user-select: none;
   }
   h1 { font-size: 1.4em; margin-bottom: 12px; }
   h2 { font-size: 1.1em; margin: 20px 0 8px; color: #555; }
+
+  .section-divider {
+    border: none;
+    border-top: 1px solid #ddd;
+    margin: 16px 0 4px;
+  }
 
   /* Task cards */
   .task {
@@ -27,13 +34,29 @@
     display: flex;
     align-items: center;
     gap: 10px;
+    transition: transform 0.15s, box-shadow 0.15s;
   }
   .task.once { background: #e8f0fe; }
   .task.complete { opacity: 0.55; }
+  .task.dragging {
+    opacity: 0.85;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.18);
+    transform: scale(1.02);
+    z-index: 30;
+  }
+  .task.drag-over-above { border-top: 2px solid #1976d2; }
+  .task.drag-over-below { border-bottom: 2px solid #1976d2; }
   .task-body { flex: 1; min-width: 0; }
   .task-title { font-weight: 600; }
   .task-meta { font-size: 0.82em; color: #888; margin-top: 2px; }
   .task-notes { font-size: 0.85em; color: #666; margin-top: 4px; }
+
+  /* Drag handle */
+  .drag-handle {
+    cursor: grab; color: #bbb; font-size: 1.2em;
+    padding: 4px 2px; touch-action: none; line-height: 1;
+  }
+  .drag-handle:active { cursor: grabbing; }
 
   /* Buttons */
   .btn {
@@ -114,6 +137,9 @@
   .fab:hover { background: #1565c0; }
 
   .empty { text-align: center; color: #999; padding: 40px 0; }
+
+  /* Drag list container */
+  .drag-list { min-height: 4px; }
 </style>
 </head>
 <body>
@@ -170,19 +196,40 @@ function render(tasks) {
     return;
   }
 
-  const todo = tasks.filter(t => t.status === 'To Do');
-  const done = tasks.filter(t => t.status === 'Complete');
+  const todoRecurring = tasks.filter(t => t.status === 'To Do' && t.cadence !== 'once');
+  const todoOnce = tasks.filter(t => t.status === 'To Do' && t.cadence === 'once');
+  const doneRecurring = tasks.filter(t => t.status === 'Complete' && t.cadence !== 'once');
+  const doneOnce = tasks.filter(t => t.status === 'Complete' && t.cadence === 'once');
 
   let html = '';
-  if (todo.length) {
+
+  if (todoRecurring.length || todoOnce.length) {
     html += '<h2>To Do</h2>';
-    todo.forEach(t => html += taskCard(t, false));
+    todoRecurring.forEach(t => html += taskCard(t, false));
+    if (todoRecurring.length && todoOnce.length) {
+      html += '<hr class="section-divider">';
+    }
+    if (todoOnce.length) {
+      html += '<div class="drag-list" id="drag-todo-once">';
+      todoOnce.forEach(t => html += taskCard(t, false));
+      html += '</div>';
+    }
   }
-  if (done.length) {
+
+  if (doneRecurring.length || doneOnce.length) {
     html += '<h2>Complete</h2>';
-    done.forEach(t => html += taskCard(t, true));
+    doneRecurring.forEach(t => html += taskCard(t, true));
+    if (doneRecurring.length && doneOnce.length) {
+      html += '<hr class="section-divider">';
+    }
+    doneOnce.forEach(t => html += taskCard(t, true));
   }
+
   app.innerHTML = html;
+
+  // Init drag on one-time to-do list
+  const dragList = document.getElementById('drag-todo-once');
+  if (dragList) initDrag(dragList);
 }
 
 function taskCard(t, complete) {
@@ -193,8 +240,12 @@ function taskCard(t, complete) {
   const lastDone = t.last_completed ? t.last_completed.slice(0, 10) : 'never';
   const doneBtn = complete ? '' :
     `<button class="btn btn-done" onclick="completeTask('${t.id}')">Done</button>`;
+  // Drag handle only for incomplete one-time tasks
+  const handle = (!complete && t.cadence === 'once')
+    ? '<span class="drag-handle">⠿</span>' : '';
   return `
-    <div class="${cls}">
+    <div class="${cls}" data-id="${t.id}">
+      ${handle}
       <div class="task-body">
         <div class="task-title">${esc(t.title)}</div>
         <div class="task-meta">${t.cadence} · last: ${lastDone}</div>
@@ -213,10 +264,115 @@ function taskCard(t, complete) {
     </div>`;
 }
 
+// --- Drag & Drop (touch + mouse) ---
+function initDrag(container) {
+  let dragEl = null;
+  let placeholder = null;
+  let startY = 0;
+  let offsetY = 0;
+
+  function getTaskCards() {
+    return [...container.querySelectorAll('.task')];
+  }
+
+  function onStart(e) {
+    const handle = e.target.closest('.drag-handle');
+    if (!handle) return;
+    e.preventDefault();
+
+    dragEl = handle.closest('.task');
+    dragEl.classList.add('dragging');
+
+    const rect = dragEl.getBoundingClientRect();
+    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+    offsetY = clientY - rect.top;
+    startY = clientY;
+
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onEnd);
+    document.addEventListener('touchmove', onMove, { passive: false });
+    document.addEventListener('touchend', onEnd);
+  }
+
+  function onMove(e) {
+    if (!dragEl) return;
+    e.preventDefault();
+
+    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+
+    // Clear all indicators
+    getTaskCards().forEach(c => {
+      c.classList.remove('drag-over-above', 'drag-over-below');
+    });
+
+    // Find which card we're over
+    const cards = getTaskCards().filter(c => c !== dragEl);
+    for (const card of cards) {
+      const rect = card.getBoundingClientRect();
+      const mid = rect.top + rect.height / 2;
+      if (clientY >= rect.top && clientY <= rect.bottom) {
+        if (clientY < mid) {
+          card.classList.add('drag-over-above');
+        } else {
+          card.classList.add('drag-over-below');
+        }
+        break;
+      }
+    }
+  }
+
+  function onEnd(e) {
+    if (!dragEl) return;
+
+    const clientY = e.changedTouches ? e.changedTouches[0].clientY : e.clientY;
+
+    // Find drop target
+    const cards = getTaskCards().filter(c => c !== dragEl);
+    let inserted = false;
+    for (const card of cards) {
+      const rect = card.getBoundingClientRect();
+      const mid = rect.top + rect.height / 2;
+      if (clientY >= rect.top && clientY <= rect.bottom) {
+        if (clientY < mid) {
+          container.insertBefore(dragEl, card);
+        } else {
+          container.insertBefore(dragEl, card.nextSibling);
+        }
+        inserted = true;
+        break;
+      }
+    }
+
+    // Clean up
+    dragEl.classList.remove('dragging');
+    getTaskCards().forEach(c => {
+      c.classList.remove('drag-over-above', 'drag-over-below');
+    });
+
+    // Save new order
+    if (inserted) {
+      const newOrder = getTaskCards().map(c => c.dataset.id);
+      fetch(API + '/tasks/reorder', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ task_ids: newOrder }),
+      });
+    }
+
+    dragEl = null;
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup', onEnd);
+    document.removeEventListener('touchmove', onMove);
+    document.removeEventListener('touchend', onEnd);
+  }
+
+  container.addEventListener('mousedown', onStart);
+  container.addEventListener('touchstart', onStart, { passive: false });
+}
+
 function toggleMenu(e) {
   e.stopPropagation();
   const dropdown = e.target.closest('.menu-wrap').querySelector('.menu-dropdown');
-  // Close all other menus first
   document.querySelectorAll('.menu-dropdown.open').forEach(m => {
     if (m !== dropdown) m.classList.remove('open');
   });
@@ -251,7 +407,6 @@ function openForm() {
 }
 
 async function openEdit(id) {
-  // Close the menu
   document.querySelectorAll('.menu-dropdown.open').forEach(m => m.classList.remove('open'));
 
   const res = await fetch(API + '/tasks');

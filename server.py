@@ -44,9 +44,15 @@ def _init_db() -> None:
             cadence TEXT CHECK(cadence IN ('weekly', 'monthly', 'quarterly') OR cadence IS NULL),
             notes TEXT,
             last_completed TEXT,
+            sort_order INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL
         )
     """)
+    # Migration: add sort_order if missing (existing DBs)
+    try:
+        conn.execute("ALTER TABLE tasks ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass  # column already exists
     conn.commit()
     conn.close()
 
@@ -89,16 +95,20 @@ def _format_task(row: sqlite3.Row) -> dict:
         "notes": row["notes"] or "",
         "status": status,
         "last_completed": row["last_completed"],
+        "sort_order": row["sort_order"],
         "created_at": row["created_at"],
     }
 
 
 def _sort_tasks(tasks: list[dict]) -> list[dict]:
-    """Sort: To Do before Complete, recurring before one-time, then by title."""
+    """Sort: To Do before Complete, recurring before one-time.
+    Recurring sorted by title; one-time sorted by sort_order."""
     def sort_key(t):
         status_ord = 0 if t["status"] == "To Do" else 1
         recurring_ord = 0 if t["cadence"] != "once" else 1
-        return (status_ord, recurring_ord, t["title"])
+        # Recurring: alphabetical. One-time: by sort_order.
+        order = t["title"].lower() if t["cadence"] != "once" else str(t["sort_order"]).zfill(10)
+        return (status_ord, recurring_ord, order)
     return sorted(tasks, key=sort_key)
 
 
@@ -151,9 +161,12 @@ def add_task(title: str, cadence: str = "once", notes: Optional[str] = None) -> 
     db_cadence = None if cadence == "once" else cadence
     task_id = str(uuid.uuid4())[:8]
     conn = _get_db()
+    # For one-time tasks, put at end of sort order
+    max_order = conn.execute("SELECT COALESCE(MAX(sort_order), 0) FROM tasks WHERE cadence IS NULL").fetchone()[0]
+    sort_order = max_order + 1 if db_cadence is None else 0
     conn.execute(
-        "INSERT INTO tasks (id, title, cadence, notes, created_at) VALUES (?, ?, ?, ?, ?)",
-        (task_id, title.strip(), db_cadence, notes, _now_iso()),
+        "INSERT INTO tasks (id, title, cadence, notes, sort_order, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        (task_id, title.strip(), db_cadence, notes, sort_order, _now_iso()),
     )
     conn.commit()
     conn.close()

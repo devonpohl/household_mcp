@@ -49,6 +49,7 @@
   .task-body { flex: 1; min-width: 0; }
   .task-title { font-weight: 600; }
   .task-meta { font-size: 0.82em; color: #888; margin-top: 2px; }
+  .overdue { color: #c62828; font-weight: 600; }
   .task-notes { font-size: 0.85em; color: #666; margin-top: 4px; }
 
   /* Drag handle */
@@ -232,6 +233,18 @@ function render(tasks) {
   if (dragList) initDrag(dragList);
 }
 
+const CADENCE_DAYS = { weekly: 7, monthly: 30, quarterly: 90 };
+
+function daysOverdue(t) {
+  // Only for recurring tasks with a prior completion that are currently To Do
+  if (t.cadence === 'once' || !t.last_completed || t.status !== 'To Do') return null;
+  const last = new Date(t.last_completed);
+  const now = new Date();
+  const daysSince = Math.floor((now - last) / 86400000);
+  const over = daysSince - CADENCE_DAYS[t.cadence];
+  return over > 0 ? over : null;
+}
+
 function taskCard(t, complete) {
   let cls = 'task';
   if (complete) cls += ' complete';
@@ -243,12 +256,15 @@ function taskCard(t, complete) {
   // Drag handle only for incomplete one-time tasks
   const handle = (!complete && t.cadence === 'once')
     ? '<span class="drag-handle">⠿</span>' : '';
+  const overdue = daysOverdue(t);
+  const overdueBit = overdue !== null
+    ? ` · <span class="overdue">${overdue} day${overdue === 1 ? '' : 's'} overdue</span>` : '';
   return `
     <div class="${cls}" data-id="${t.id}">
       ${handle}
       <div class="task-body">
         <div class="task-title">${esc(t.title)}</div>
-        <div class="task-meta">${t.cadence} · last: ${lastDone}</div>
+        <div class="task-meta">${t.cadence} · last: ${lastDone}${overdueBit}</div>
         ${notes}
       </div>
       <div class="task-actions">

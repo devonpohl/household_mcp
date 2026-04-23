@@ -165,6 +165,10 @@
       <option value="monthly">Monthly</option>
       <option value="quarterly">Quarterly</option>
     </select>
+    <div id="dueDateRow">
+      <label for="fDueDate">Due Date</label>
+      <input type="date" id="fDueDate">
+    </div>
     <label for="fNotes">Notes</label>
     <textarea id="fNotes" placeholder="Optional details…"></textarea>
     <div class="form-actions">
@@ -236,8 +240,17 @@ function render(tasks) {
 const CADENCE_DAYS = { weekly: 7, monthly: 30, quarterly: 90 };
 
 function daysOverdue(t) {
-  // Only for recurring tasks with a prior completion that are currently To Do
-  if (t.cadence === 'once' || !t.last_completed || t.status !== 'To Do') return null;
+  if (t.status !== 'To Do') return null;
+  // One-time tasks: overdue based on due_date
+  if (t.cadence === 'once') {
+    if (!t.due_date) return null;
+    const due = new Date(t.due_date + 'T00:00:00');
+    const now = new Date();
+    const over = Math.floor((now - due) / 86400000);
+    return over > 0 ? over : null;
+  }
+  // Recurring tasks: overdue based on last_completed + cadence
+  if (!t.last_completed) return null;
   const last = new Date(t.last_completed);
   const now = new Date();
   const daysSince = Math.floor((now - last) / 86400000);
@@ -259,12 +272,19 @@ function taskCard(t, complete) {
   const overdue = daysOverdue(t);
   const overdueBit = overdue !== null
     ? ` · <span class="overdue">${overdue} day${overdue === 1 ? '' : 's'} overdue</span>` : '';
+  // Build meta line: recurring shows cadence + last done; one-time shows due date if set
+  let metaText;
+  if (t.cadence === 'once') {
+    metaText = t.due_date ? `due: ${t.due_date}` : 'once';
+  } else {
+    metaText = `${t.cadence} · last: ${lastDone}`;
+  }
   return `
     <div class="${cls}" data-id="${t.id}">
       ${handle}
       <div class="task-body">
         <div class="task-title">${esc(t.title)}</div>
-        <div class="task-meta">${t.cadence} · last: ${lastDone}${overdueBit}</div>
+        <div class="task-meta">${metaText}${overdueBit}</div>
         ${notes}
       </div>
       <div class="task-actions">
@@ -413,12 +433,21 @@ async function deleteTask(id, title) {
 }
 
 // --- Form ---
+function toggleDueDateRow() {
+  const cadence = document.getElementById('fCadence').value;
+  document.getElementById('dueDateRow').style.display = cadence === 'once' ? '' : 'none';
+}
+
+document.getElementById('fCadence').addEventListener('change', toggleDueDateRow);
+
 function openForm() {
   document.getElementById('formTitle').textContent = 'Add Task';
   document.getElementById('editId').value = '';
   document.getElementById('fTitle').value = '';
   document.getElementById('fCadence').value = 'once';
+  document.getElementById('fDueDate').value = '';
   document.getElementById('fNotes').value = '';
+  toggleDueDateRow();
   document.getElementById('formOverlay').classList.add('open');
 }
 
@@ -434,7 +463,9 @@ async function openEdit(id) {
   document.getElementById('editId').value = t.id;
   document.getElementById('fTitle').value = t.title;
   document.getElementById('fCadence').value = t.cadence;
+  document.getElementById('fDueDate').value = t.due_date || '';
   document.getElementById('fNotes').value = t.notes || '';
+  toggleDueDateRow();
   document.getElementById('formOverlay').classList.add('open');
 }
 
@@ -444,11 +475,16 @@ function closeForm() {
 
 async function submitForm() {
   const editId = document.getElementById('editId').value;
+  const cadence = document.getElementById('fCadence').value;
   const body = {
     title: document.getElementById('fTitle').value.trim(),
-    cadence: document.getElementById('fCadence').value,
+    cadence: cadence,
     notes: document.getElementById('fNotes').value.trim() || null,
   };
+  // Include due_date for one-time tasks
+  if (cadence === 'once') {
+    body.due_date = document.getElementById('fDueDate').value || null;
+  }
   if (!body.title) { alert('Title is required'); return; }
 
   if (editId) {

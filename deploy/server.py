@@ -55,6 +55,7 @@ async def api_add_task(request: Request) -> JSONResponse:
     title = body.get("title", "").strip()
     cadence = body.get("cadence", "once").lower().strip()
     notes = body.get("notes")
+    due_date = body.get("due_date")
 
     if not title:
         return JSONResponse({"error": "title is required"}, status_code=400)
@@ -62,13 +63,15 @@ async def api_add_task(request: Request) -> JSONResponse:
         return JSONResponse({"error": f"cadence must be one of: {', '.join(VALID_CADENCES)}"}, status_code=400)
 
     db_cadence = None if cadence == "once" else cadence
+    # due_date only applies to one-time tasks
+    db_due_date = due_date if db_cadence is None else None
     task_id = str(uuid.uuid4())[:8]
     conn = _get_db()
     max_order = conn.execute("SELECT COALESCE(MAX(sort_order), 0) FROM tasks WHERE cadence IS NULL").fetchone()[0]
     sort_order = max_order + 1 if db_cadence is None else 0
     conn.execute(
-        "INSERT INTO tasks (id, title, cadence, notes, sort_order, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-        (task_id, title, db_cadence, notes, sort_order, _now_iso()),
+        "INSERT INTO tasks (id, title, cadence, notes, sort_order, due_date, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (task_id, title, db_cadence, notes, sort_order, db_due_date, _now_iso()),
     )
     conn.commit()
     conn.close()
@@ -97,6 +100,11 @@ async def api_edit_task(request: Request) -> JSONResponse:
                 val = None if val == "once" else val
             updates.append(f"{field} = ?")
             values.append(val)
+
+    # Handle due_date separately (can be null/empty to clear)
+    if "due_date" in body:
+        updates.append("due_date = ?")
+        values.append(body["due_date"] if body["due_date"] else None)
 
     if not updates:
         conn.close()

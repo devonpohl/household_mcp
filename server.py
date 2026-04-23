@@ -45,12 +45,18 @@ def _init_db() -> None:
             notes TEXT,
             last_completed TEXT,
             sort_order INTEGER NOT NULL DEFAULT 0,
+            due_date TEXT,
             created_at TEXT NOT NULL
         )
     """)
     # Migration: add sort_order if missing (existing DBs)
     try:
         conn.execute("ALTER TABLE tasks ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass  # column already exists
+    # Migration: add due_date if missing (existing DBs)
+    try:
+        conn.execute("ALTER TABLE tasks ADD COLUMN due_date TEXT")
     except sqlite3.OperationalError:
         pass  # column already exists
     conn.commit()
@@ -96,6 +102,7 @@ def _format_task(row: sqlite3.Row) -> dict:
         "status": status,
         "last_completed": row["last_completed"],
         "sort_order": row["sort_order"],
+        "due_date": row["due_date"],
         "created_at": row["created_at"],
     }
 
@@ -139,38 +146,43 @@ def list_tasks() -> str:
             lines.append(f"\n## {current_status}")
         notes_bit = f" — {t['notes']}" if t["notes"] else ""
         completed_bit = f" (last: {t['last_completed'][:10]})" if t["last_completed"] else ""
-        lines.append(f"- **{t['title']}** [{t['cadence']}]{completed_bit}{notes_bit}")
+        due_bit = f" (due: {t['due_date']})" if t.get("due_date") else ""
+        lines.append(f"- **{t['title']}** [{t['cadence']}]{completed_bit}{due_bit}{notes_bit}")
         lines.append(f"  id: `{t['id']}`")
 
     return "\n".join(lines)
 
 
 @mcp.tool()
-def add_task(title: str, cadence: str = "once", notes: Optional[str] = None) -> str:
+def add_task(title: str, cadence: str = "once", notes: Optional[str] = None, due_date: Optional[str] = None) -> str:
     """Add a new household task.
 
     Args:
         title: Name of the task (e.g. "Clean gutters")
         cadence: How often — one of: weekly, monthly, quarterly, once. Defaults to once.
         notes: Optional free text notes about the task
+        due_date: Optional due date for one-time tasks (YYYY-MM-DD format)
     """
     cadence = cadence.lower().strip()
     if cadence not in VALID_CADENCES:
         return f"Invalid cadence '{cadence}'. Must be one of: {', '.join(VALID_CADENCES)}."
 
     db_cadence = None if cadence == "once" else cadence
+    # due_date only applies to one-time tasks
+    db_due_date = due_date if db_cadence is None else None
     task_id = str(uuid.uuid4())[:8]
     conn = _get_db()
     # For one-time tasks, put at end of sort order
     max_order = conn.execute("SELECT COALESCE(MAX(sort_order), 0) FROM tasks WHERE cadence IS NULL").fetchone()[0]
     sort_order = max_order + 1 if db_cadence is None else 0
     conn.execute(
-        "INSERT INTO tasks (id, title, cadence, notes, sort_order, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-        (task_id, title.strip(), db_cadence, notes, sort_order, _now_iso()),
+        "INSERT INTO tasks (id, title, cadence, notes, sort_order, due_date, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (task_id, title.strip(), db_cadence, notes, sort_order, db_due_date, _now_iso()),
     )
     conn.commit()
     conn.close()
-    return f"Added task '{title}' ({cadence}). ID: {task_id}"
+    due_bit = f", due: {db_due_date}" if db_due_date else ""
+    return f"Added task '{title}' ({cadence}{due_bit}). ID: {task_id}"
 
 
 @mcp.tool()
@@ -179,6 +191,7 @@ def edit_task(
     title: Optional[str] = None,
     cadence: Optional[str] = None,
     notes: Optional[str] = None,
+    due_date: Optional[str] = None,
 ) -> str:
     """Edit an existing task. Only provided fields are updated.
 
@@ -187,6 +200,7 @@ def edit_task(
         title: New title
         cadence: New cadence — one of: weekly, monthly, quarterly, once
         notes: New notes (free text)
+        due_date: Due date for one-time tasks (YYYY-MM-DD format, or empty string to clear)
     """
     if cadence is not None:
         cadence = cadence.lower().strip()
@@ -210,10 +224,14 @@ def edit_task(
     if notes is not None:
         updates.append("notes = ?")
         values.append(notes)
+    if due_date is not None:
+        updates.append("due_date = ?")
+        # Empty string clears the due date
+        values.append(due_date if due_date else None)
 
     if not updates:
         conn.close()
-        return "Nothing to update — provide at least one of: title, cadence, notes."
+        return "Nothing to update — provide at least one of: title, cadence, notes, due_date."
 
     values.append(task_id)
     conn.execute(f"UPDATE tasks SET {', '.join(updates)} WHERE id = ?", values)
@@ -222,7 +240,8 @@ def edit_task(
     updated = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
     conn.close()
     t = _format_task(updated)
-    return f"Updated '{t['title']}' — cadence: {t['cadence']}, status: {t['status']}"
+    due_bit = f", due: {t['due_date']}" if t['due_date'] else ""
+    return f"Updated '{t['title']}' — cadence: {t['cadence']}, status: {t['status']}{due_bit}"
 
 
 @mcp.tool()

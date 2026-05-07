@@ -20,12 +20,18 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from server import (
     _format_task,
+    _format_packing_item,
     _get_db,
+    _list_bags,
+    _ensure_bag,
     _now_iso,
     _sort_tasks,
+    _canonical_status,
     mcp,
     CADENCE_DAYS,
     VALID_CADENCES,
+    PACKING_STATUSES,
+    PACKING_NEXT_STATUS,
 )
 
 
@@ -160,6 +166,219 @@ async def api_reorder_tasks(request: Request) -> JSONResponse:
     return JSONResponse({"ok": True})
 
 
+# ---------------------------------------------------------------------------
+# Packing list REST API
+# ---------------------------------------------------------------------------
+async def api_list_packing_items(request: Request) -> JSONResponse:
+    conn = _get_db()
+    rows = conn.execute("SELECT * FROM packing_items").fetchall()
+    items = [_format_packing_item(r) for r in rows]
+    conn.close()
+    return JSONResponse(items)
+
+
+async def api_add_packing_item(request: Request) -> JSONResponse:
+    body = await request.json()
+    title = (body.get("title") or "").strip()
+    bag_raw = body.get("bag")
+    bag = bag_raw.strip() if isinstance(bag_raw, str) and bag_raw.strip() else None
+    status_in = body.get("status") or "Have"
+    status = _canonical_status(status_in)
+    priority = body.get("priority")
+
+    if not title:
+        return JSONResponse({"error": "title is required"}, status_code=400)
+    if status is None:
+        return JSONResponse(
+            {"error": f"status must be one of: {', '.join(PACKING_STATUSES)}"}, status_code=400
+        )
+    if priority not in (None, 1, 2, 3):
+        return JSONResponse({"error": "priority must be 1, 2, 3, or null"}, status_code=400)
+
+    item_id = str(uuid.uuid4())[:8]
+    conn = _get_db()
+    if bag:
+        _ensure_bag(conn, bag)
+    max_order = conn.execute("SELECT COALESCE(MAX(sort_order), 0) FROM packing_items").fetchone()[0]
+    conn.execute(
+        "INSERT INTO packing_items (id, title, status, bag, priority, sort_order, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (item_id, title, status, bag, priority, max_order + 1, _now_iso()),
+    )
+    conn.commit()
+    conn.close()
+    return JSONResponse({"id": item_id, "title": title}, status_code=201)
+
+
+async def api_edit_packing_item(request: Request) -> JSONResponse:
+    item_id = request.path_params["item_id"]
+    body = await request.json()
+
+    conn = _get_db()
+    row = conn.execute("SELECT * FROM packing_items WHERE id = ?", (item_id,)).fetchone()
+    if not row:
+        conn.close()
+        return JSONResponse({"error": "not found"}, status_code=404)
+
+    updates, values = [], []
+    if "title" in body and body["title"] is not None:
+        title = body["title"].strip()
+        if not title:
+            conn.close()
+            return JSONResponse({"error": "title cannot be empty"}, status_code=400)
+        updates.append("title = ?")
+        values.append(title)
+    if "status" in body and body["status"] is not None:
+        canonical = _canonical_status(body["status"])
+        if canonical is None:
+            conn.close()
+            return JSONResponse(
+                {"error": f"status must be one of: {', '.join(PACKING_STATUSES)}"}, status_code=400
+            )
+        updates.append("status = ?")
+        values.append(canonical)
+    if "bag" in body:
+        bag_raw = body["bag"]
+        bag = bag_raw.strip() if isinstance(bag_raw, str) and bag_raw.strip() else None
+        if bag:
+            _ensure_bag(conn, bag)
+        updates.append("bag = ?")
+        values.append(bag)
+    if "priority" in body:
+        p = body["priority"]
+        if p in ("", None):
+            updates.append("priority = ?")
+            values.append(None)
+        elif p in (1, 2, 3, "1", "2", "3"):
+            updates.append("priority = ?")
+            values.append(int(p))
+        else:
+            conn.close()
+            return JSONResponse({"error": "priority must be 1, 2, 3, or null"}, status_code=400)
+
+    if not updates:
+        conn.close()
+        return JSONResponse({"error": "nothing to update"}, status_code=400)
+
+    values.append(item_id)
+    conn.execute(f"UPDATE packing_items SET {', '.join(updates)} WHERE id = ?", values)
+    conn.commit()
+    conn.close()
+    return JSONResponse({"ok": True})
+
+
+async def api_delete_packing_item(request: Request) -> JSONResponse:
+    item_id = request.path_params["item_id"]
+    conn = _get_db()
+    row = conn.execute("SELECT * FROM packing_items WHERE id = ?", (item_id,)).fetchone()
+    if not row:
+        conn.close()
+        return JSONResponse({"error": "not found"}, status_code=404)
+    conn.execute("DELETE FROM packing_items WHERE id = ?", (item_id,))
+    conn.commit()
+    conn.close()
+    return JSONResponse({"ok": True})
+
+
+async def api_bulk_add_packing_items(request: Request) -> JSONResponse:
+    """Bulk add packing items. Body: {"items": [{title, status, bag, priority}, ...]}.
+
+    Partial success: each row is validated independently. Returns counts
+    plus per-row errors so the user knows what to fix.
+    """
+    body = await request.json()
+    items = body.get("items")
+    if not isinstance(items, list):
+        return JSONResponse({"error": "items must be a list"}, status_code=400)
+
+    added = 0
+    errors = []
+    conn = _get_db()
+    try:
+        max_order = conn.execute(
+            "SELECT COALESCE(MAX(sort_order), 0) FROM packing_items"
+        ).fetchone()[0]
+        for idx, raw in enumerate(items, start=1):
+            try:
+                if not isinstance(raw, dict):
+                    raise ValueError("row must be an object")
+                title = (raw.get("title") or "").strip() if isinstance(raw.get("title"), str) else ""
+                bag_raw = raw.get("bag")
+                bag = bag_raw.strip() if isinstance(bag_raw, str) and bag_raw.strip() else None
+                status_in = raw.get("status")
+                if status_in in (None, ""):
+                    status = "Have"
+                else:
+                    status = _canonical_status(status_in)
+                p_raw = raw.get("priority")
+                if p_raw in (None, "", "None"):
+                    priority = None
+                else:
+                    try:
+                        priority = int(p_raw)
+                    except (ValueError, TypeError):
+                        raise ValueError(f"invalid priority {p_raw!r}")
+                    if priority not in (1, 2, 3):
+                        raise ValueError("priority must be 1, 2, or 3")
+
+                if not title:
+                    raise ValueError("title is required")
+                if status is None:
+                    raise ValueError(f"unknown status {status_in!r}")
+
+                if bag:
+                    _ensure_bag(conn, bag)
+                max_order += 1
+                item_id = str(uuid.uuid4())[:8]
+                conn.execute(
+                    "INSERT INTO packing_items (id, title, status, bag, priority, sort_order, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (item_id, title, status, bag, priority, max_order, _now_iso()),
+                )
+                added += 1
+            except Exception as e:
+                errors.append({"row": idx, "error": str(e)})
+        conn.commit()
+    finally:
+        conn.close()
+    return JSONResponse({"added": added, "skipped": len(errors), "errors": errors})
+
+
+async def api_advance_packing_item(request: Request) -> JSONResponse:
+    item_id = request.path_params["item_id"]
+    conn = _get_db()
+    row = conn.execute("SELECT * FROM packing_items WHERE id = ?", (item_id,)).fetchone()
+    if not row:
+        conn.close()
+        return JSONResponse({"error": "not found"}, status_code=404)
+    nxt = PACKING_NEXT_STATUS.get(row["status"])
+    if nxt is None:
+        conn.close()
+        return JSONResponse({"error": "already packed"}, status_code=400)
+    conn.execute("UPDATE packing_items SET status = ? WHERE id = ?", (nxt, item_id))
+    conn.commit()
+    conn.close()
+    return JSONResponse({"ok": True, "status": nxt})
+
+
+async def api_list_packing_bags(request: Request) -> JSONResponse:
+    conn = _get_db()
+    bags = _list_bags(conn)
+    conn.close()
+    return JSONResponse(bags)
+
+
+async def api_add_packing_bag(request: Request) -> JSONResponse:
+    body = await request.json()
+    name = (body.get("name") or "").strip()
+    if not name:
+        return JSONResponse({"error": "name is required"}, status_code=400)
+    conn = _get_db()
+    _ensure_bag(conn, name)
+    conn.commit()
+    bags = _list_bags(conn)
+    conn.close()
+    return JSONResponse({"ok": True, "bags": bags}, status_code=201)
+
+
 async def serve_index(request: Request) -> HTMLResponse:
     static_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "static")
     with open(os.path.join(static_dir, "index.html")) as f:
@@ -182,6 +401,15 @@ custom_routes = [
     Route("/api/tasks/{task_id}", api_edit_task, methods=["PUT"]),
     Route("/api/tasks/{task_id}/complete", api_complete_task, methods=["POST"]),
     Route("/api/tasks/{task_id}", api_delete_task, methods=["DELETE"]),
+    # Packing list
+    Route("/api/packing/items", api_list_packing_items, methods=["GET"]),
+    Route("/api/packing/items", api_add_packing_item, methods=["POST"]),
+    Route("/api/packing/items/bulk", api_bulk_add_packing_items, methods=["POST"]),
+    Route("/api/packing/items/{item_id}", api_edit_packing_item, methods=["PUT"]),
+    Route("/api/packing/items/{item_id}", api_delete_packing_item, methods=["DELETE"]),
+    Route("/api/packing/items/{item_id}/advance", api_advance_packing_item, methods=["POST"]),
+    Route("/api/packing/bags", api_list_packing_bags, methods=["GET"]),
+    Route("/api/packing/bags", api_add_packing_bag, methods=["POST"]),
 ]
 
 for i, route in enumerate(custom_routes):

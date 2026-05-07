@@ -12,7 +12,7 @@
     color: #222;
     max-width: 600px;
     margin: 0 auto;
-    padding: 16px;
+    padding: 0 16px 16px;
     -webkit-user-select: none; user-select: none;
   }
   h1 { font-size: 1.4em; margin-bottom: 12px; }
@@ -24,7 +24,78 @@
     margin: 16px 0 4px;
   }
 
-  /* Task cards */
+  /* --- Tabs --- */
+  .tabs-bar {
+    position: sticky; top: 0; z-index: 9;
+    display: flex; gap: 8px;
+    background: #f5f5f5;
+    padding: 12px 0 8px;
+    border-bottom: 1px solid #e2e2e2;
+  }
+  .tab-btn {
+    flex: 1;
+    border: 1px solid #ccc;
+    background: #fff;
+    color: #555;
+    border-radius: 8px;
+    padding: 10px 12px;
+    font-size: 0.95em;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+  }
+  .tab-btn.active {
+    background: #1976d2;
+    color: #fff;
+    border-color: #1976d2;
+  }
+
+  /* --- Packing action row (import/template) --- */
+  .pack-actions {
+    display: flex; gap: 8px; align-items: center;
+    padding: 8px 0 4px;
+    font-size: 0.85em;
+  }
+  .pack-actions .link-btn {
+    background: none; border: none; color: #1976d2;
+    cursor: pointer; padding: 0; font-size: inherit;
+  }
+  .pack-actions .link-btn:hover { text-decoration: underline; }
+  .pack-actions .sep { color: #ccc; }
+
+  /* --- Filter bar (Packing) --- */
+  .filter-bar {
+    position: sticky; top: 60px; z-index: 8;
+    background: #f5f5f5;
+    padding: 8px 0 10px;
+    border-bottom: 1px solid #e2e2e2;
+    margin-bottom: 12px;
+  }
+  .filter-bar input, .filter-bar select {
+    width: 100%;
+    padding: 8px 10px;
+    border: 1px solid #ccc;
+    border-radius: 6px;
+    font-size: 0.9em;
+    font-family: inherit;
+    background: #fff;
+  }
+  .filter-row { display: flex; gap: 6px; margin-top: 6px; }
+  .filter-row > * { flex: 1; min-width: 0; }
+  .btn-clear {
+    background: #e0e0e0;
+    color: #333;
+    border: none;
+    border-radius: 6px;
+    padding: 8px 10px;
+    font-size: 0.85em;
+    cursor: pointer;
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+  .btn-clear:hover { background: #d0d0d0; }
+
+  /* --- Task / packing cards --- */
   .task {
     background: #fff;
     border-radius: 8px;
@@ -51,6 +122,18 @@
   .task-meta { font-size: 0.82em; color: #888; margin-top: 2px; }
   .overdue { color: #c62828; font-weight: 600; }
   .task-notes { font-size: 0.85em; color: #666; margin-top: 4px; }
+
+  /* Packing card colors by status */
+  .pack-card { border-left: 6px solid transparent; }
+  .pack-card.s-need {
+    background: #fdecea; border-left-color: #c62828;
+  }
+  .pack-card.s-have {
+    background: #fff8d6; border-left-color: #f9a825;
+  }
+  .pack-card.s-packed {
+    background: #e3f5e3; border-left-color: #2e7d32;
+  }
 
   /* Drag handle */
   .drag-handle {
@@ -108,7 +191,7 @@
     display: none;
     position: fixed; inset: 0;
     background: rgba(0,0,0,0.3);
-    z-index: 10;
+    z-index: 30;
     justify-content: center; align-items: center;
   }
   .form-overlay.open { display: flex; }
@@ -139,19 +222,66 @@
 
   .empty { text-align: center; color: #999; padding: 40px 0; }
 
+  .pill {
+    display: inline-block; font-size: 0.72em; font-weight: 600;
+    padding: 2px 6px; border-radius: 10px; margin-left: 4px;
+    background: rgba(0,0,0,0.08); color: #444;
+  }
+  .pill.prio-1 { background: #ffd6d6; color: #b00020; }
+  .pill.prio-2 { background: #ffe9c2; color: #b25a00; }
+  .pill.prio-3 { background: #e0e7ff; color: #364fc7; }
+
   /* Drag list container */
   .drag-list { min-height: 4px; }
 </style>
 </head>
 <body>
 
-<h1>Household Tasks</h1>
-<div id="app"><div class="empty">Loading…</div></div>
+<!-- Tabs -->
+<div class="tabs-bar">
+  <button class="tab-btn active" id="tab-household" onclick="switchTab('household')">Household Tasks</button>
+  <button class="tab-btn" id="tab-packing" onclick="switchTab('packing')">Bahamas Packing</button>
+</div>
+
+<!-- Household tab content -->
+<div id="view-household">
+  <h1>Household Tasks</h1>
+  <div id="app"><div class="empty">Loading…</div></div>
+</div>
+
+<!-- Packing tab content -->
+<div id="view-packing" style="display:none;">
+  <div class="pack-actions">
+    <input type="file" id="pImportFile" accept=".csv,text/csv" style="display:none" onchange="onImportFile(event)">
+    <button class="link-btn" onclick="document.getElementById('pImportFile').click()">Import CSV</button>
+    <span class="sep">·</span>
+    <button class="link-btn" onclick="downloadCSVTemplate()">Download template</button>
+  </div>
+  <div class="filter-bar">
+    <input type="text" id="pSearch" placeholder="Search packing items…" oninput="renderPacking()">
+    <div class="filter-row">
+      <select id="pSort" onchange="renderPacking()">
+        <option value="status">Sort: Status</option>
+        <option value="title">Sort: Title</option>
+        <option value="bag">Sort: Bag</option>
+        <option value="priority">Sort: Priority</option>
+      </select>
+      <select id="pStatusFilter" onchange="renderPacking()">
+        <option value="">All statuses</option>
+        <option value="Need">Need</option>
+        <option value="Have">Have</option>
+        <option value="packed">Packed</option>
+      </select>
+      <button class="btn-clear" onclick="clearFilters()">Clear</button>
+    </div>
+  </div>
+  <div id="packingApp"><div class="empty">Loading…</div></div>
+</div>
 
 <!-- Floating add button -->
-<button class="fab" onclick="openForm()" title="Add task">+</button>
+<button class="fab" onclick="openForm()" title="Add">+</button>
 
-<!-- Add / Edit form -->
+<!-- Household Add / Edit form -->
 <div class="form-overlay" id="formOverlay">
   <div class="form-box">
     <h2 id="formTitle">Add Task</h2>
@@ -178,8 +308,41 @@
   </div>
 </div>
 
+<!-- Packing Add / Edit form -->
+<div class="form-overlay" id="packFormOverlay">
+  <div class="form-box">
+    <h2 id="packFormTitle">Add Packing Item</h2>
+    <input type="hidden" id="packEditId">
+    <label for="pfTitle">Title</label>
+    <input type="text" id="pfTitle" placeholder="e.g. Sunscreen">
+    <label for="pfStatus">Status</label>
+    <select id="pfStatus">
+      <option value="Need">Need</option>
+      <option value="Have" selected>Have</option>
+      <option value="packed">Packed</option>
+    </select>
+    <label for="pfBag">Bag (optional)</label>
+    <select id="pfBag" onchange="onBagChange()"></select>
+    <label for="pfPriority">Priority (optional)</label>
+    <select id="pfPriority">
+      <option value="">None</option>
+      <option value="1">1 (highest)</option>
+      <option value="2">2</option>
+      <option value="3">3</option>
+    </select>
+    <div class="form-actions">
+      <button class="btn btn-cancel" onclick="closePackForm()">Cancel</button>
+      <button class="btn btn-primary" onclick="submitPackForm()">Save</button>
+    </div>
+  </div>
+</div>
+
 <script>
 const API = window.location.origin + '/api';
+
+let activeTab = localStorage.getItem('activeTab') || 'household';
+let packingItems = [];
+let packingBags = [];
 
 // --- Close any open menu when tapping elsewhere ---
 document.addEventListener('click', e => {
@@ -188,6 +351,21 @@ document.addEventListener('click', e => {
   }
 });
 
+// --- Tab switching ---
+function switchTab(tab) {
+  activeTab = tab;
+  localStorage.setItem('activeTab', tab);
+  document.getElementById('tab-household').classList.toggle('active', tab === 'household');
+  document.getElementById('tab-packing').classList.toggle('active', tab === 'packing');
+  document.getElementById('view-household').style.display = tab === 'household' ? '' : 'none';
+  document.getElementById('view-packing').style.display = tab === 'packing' ? '' : 'none';
+  if (tab === 'packing') loadPacking();
+  else loadTasks();
+}
+
+// ============================================================
+// HOUSEHOLD TASKS
+// ============================================================
 async function loadTasks() {
   const res = await fetch(API + '/tasks');
   const tasks = await res.json();
@@ -232,7 +410,6 @@ function render(tasks) {
 
   app.innerHTML = html;
 
-  // Init drag on one-time to-do list
   const dragList = document.getElementById('drag-todo-once');
   if (dragList) initDrag(dragList);
 }
@@ -241,7 +418,6 @@ const CADENCE_DAYS = { weekly: 7, monthly: 30, quarterly: 90 };
 
 function daysOverdue(t) {
   if (t.status !== 'To Do') return null;
-  // One-time tasks: overdue based on due_date
   if (t.cadence === 'once') {
     if (!t.due_date) return null;
     const due = new Date(t.due_date + 'T00:00:00');
@@ -249,7 +425,6 @@ function daysOverdue(t) {
     const over = Math.floor((now - due) / 86400000);
     return over > 0 ? over : null;
   }
-  // Recurring tasks: overdue based on last_completed + cadence
   if (!t.last_completed) return null;
   const last = new Date(t.last_completed);
   const now = new Date();
@@ -266,13 +441,11 @@ function taskCard(t, complete) {
   const lastDone = t.last_completed ? t.last_completed.slice(0, 10) : 'never';
   const doneBtn = complete ? '' :
     `<button class="btn btn-done" onclick="completeTask('${t.id}')">Done</button>`;
-  // Drag handle only for incomplete one-time tasks
   const handle = (!complete && t.cadence === 'once')
     ? '<span class="drag-handle">⠿</span>' : '';
   const overdue = daysOverdue(t);
   const overdueBit = overdue !== null
     ? ` · <span class="overdue">${overdue} day${overdue === 1 ? '' : 's'} overdue</span>` : '';
-  // Build meta line: recurring shows cadence + last done; one-time shows due date if set
   let metaText;
   if (t.cadence === 'once') {
     metaText = t.due_date ? `due: ${t.due_date}` : 'once';
@@ -303,9 +476,6 @@ function taskCard(t, complete) {
 // --- Drag & Drop (touch + mouse) ---
 function initDrag(container) {
   let dragEl = null;
-  let placeholder = null;
-  let startY = 0;
-  let offsetY = 0;
 
   function getTaskCards() {
     return [...container.querySelectorAll('.task')];
@@ -319,11 +489,6 @@ function initDrag(container) {
     dragEl = handle.closest('.task');
     dragEl.classList.add('dragging');
 
-    const rect = dragEl.getBoundingClientRect();
-    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-    offsetY = clientY - rect.top;
-    startY = clientY;
-
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onEnd);
     document.addEventListener('touchmove', onMove, { passive: false });
@@ -333,25 +498,17 @@ function initDrag(container) {
   function onMove(e) {
     if (!dragEl) return;
     e.preventDefault();
-
     const clientY = e.touches ? e.touches[0].clientY : e.clientY;
-
-    // Clear all indicators
     getTaskCards().forEach(c => {
       c.classList.remove('drag-over-above', 'drag-over-below');
     });
-
-    // Find which card we're over
     const cards = getTaskCards().filter(c => c !== dragEl);
     for (const card of cards) {
       const rect = card.getBoundingClientRect();
       const mid = rect.top + rect.height / 2;
       if (clientY >= rect.top && clientY <= rect.bottom) {
-        if (clientY < mid) {
-          card.classList.add('drag-over-above');
-        } else {
-          card.classList.add('drag-over-below');
-        }
+        if (clientY < mid) card.classList.add('drag-over-above');
+        else card.classList.add('drag-over-below');
         break;
       }
     }
@@ -359,33 +516,23 @@ function initDrag(container) {
 
   function onEnd(e) {
     if (!dragEl) return;
-
     const clientY = e.changedTouches ? e.changedTouches[0].clientY : e.clientY;
-
-    // Find drop target
     const cards = getTaskCards().filter(c => c !== dragEl);
     let inserted = false;
     for (const card of cards) {
       const rect = card.getBoundingClientRect();
       const mid = rect.top + rect.height / 2;
       if (clientY >= rect.top && clientY <= rect.bottom) {
-        if (clientY < mid) {
-          container.insertBefore(dragEl, card);
-        } else {
-          container.insertBefore(dragEl, card.nextSibling);
-        }
+        if (clientY < mid) container.insertBefore(dragEl, card);
+        else container.insertBefore(dragEl, card.nextSibling);
         inserted = true;
         break;
       }
     }
-
-    // Clean up
     dragEl.classList.remove('dragging');
     getTaskCards().forEach(c => {
       c.classList.remove('drag-over-above', 'drag-over-below');
     });
-
-    // Save new order
     if (inserted) {
       const newOrder = getTaskCards().map(c => c.dataset.id);
       fetch(API + '/tasks/reorder', {
@@ -394,7 +541,6 @@ function initDrag(container) {
         body: JSON.stringify({ task_ids: newOrder }),
       });
     }
-
     dragEl = null;
     document.removeEventListener('mousemove', onMove);
     document.removeEventListener('mouseup', onEnd);
@@ -417,7 +563,7 @@ function toggleMenu(e) {
 
 function esc(s) {
   const d = document.createElement('div');
-  d.textContent = s;
+  d.textContent = s == null ? '' : String(s);
   return d.innerHTML;
 }
 
@@ -432,7 +578,6 @@ async function deleteTask(id, title) {
   loadTasks();
 }
 
-// --- Form ---
 function toggleDueDateRow() {
   const cadence = document.getElementById('fCadence').value;
   document.getElementById('dueDateRow').style.display = cadence === 'once' ? '' : 'none';
@@ -441,6 +586,7 @@ function toggleDueDateRow() {
 document.getElementById('fCadence').addEventListener('change', toggleDueDateRow);
 
 function openForm() {
+  if (activeTab === 'packing') return openPackForm();
   document.getElementById('formTitle').textContent = 'Add Task';
   document.getElementById('editId').value = '';
   document.getElementById('fTitle').value = '';
@@ -453,12 +599,10 @@ function openForm() {
 
 async function openEdit(id) {
   document.querySelectorAll('.menu-dropdown.open').forEach(m => m.classList.remove('open'));
-
   const res = await fetch(API + '/tasks');
   const tasks = await res.json();
   const t = tasks.find(x => x.id === id);
   if (!t) return;
-
   document.getElementById('formTitle').textContent = 'Edit Task';
   document.getElementById('editId').value = t.id;
   document.getElementById('fTitle').value = t.title;
@@ -481,7 +625,6 @@ async function submitForm() {
     cadence: cadence,
     notes: document.getElementById('fNotes').value.trim() || null,
   };
-  // Include due_date for one-time tasks
   if (cadence === 'once') {
     body.due_date = document.getElementById('fDueDate').value || null;
   }
@@ -504,12 +647,380 @@ async function submitForm() {
   loadTasks();
 }
 
-// Close form on overlay click
 document.getElementById('formOverlay').addEventListener('click', e => {
   if (e.target === e.currentTarget) closeForm();
 });
 
-loadTasks();
+// ============================================================
+// PACKING LIST
+// ============================================================
+async function loadPacking() {
+  const [itemsRes, bagsRes] = await Promise.all([
+    fetch(API + '/packing/items'),
+    fetch(API + '/packing/bags'),
+  ]);
+  packingItems = await itemsRes.json();
+  packingBags = await bagsRes.json();
+  // Restore filter state (drop stale legacy values that no longer match an option).
+  const saved = JSON.parse(localStorage.getItem('packFilters') || '{}');
+  if (saved.search != null) document.getElementById('pSearch').value = saved.search;
+  if (saved.sort) document.getElementById('pSort').value = saved.sort;
+  if (saved.statusFilter != null && VALID_STATUSES.includes(saved.statusFilter)) {
+    document.getElementById('pStatusFilter').value = saved.statusFilter;
+  } else {
+    document.getElementById('pStatusFilter').value = '';
+  }
+  renderPacking();
+}
+
+function persistFilters() {
+  localStorage.setItem('packFilters', JSON.stringify({
+    search: document.getElementById('pSearch').value,
+    sort: document.getElementById('pSort').value,
+    statusFilter: document.getElementById('pStatusFilter').value,
+  }));
+}
+
+function clearFilters() {
+  document.getElementById('pSearch').value = '';
+  document.getElementById('pSort').value = 'status';
+  document.getElementById('pStatusFilter').value = '';
+  persistFilters();
+  renderPacking();
+}
+
+const STATUS_ORDER = { 'Need': 0, 'Have': 1, 'packed': 2 };
+const VALID_STATUSES = ['', 'Need', 'Have', 'packed'];
+
+function statusDisplay(s) {
+  return s === 'packed' ? 'Packed' : s;
+}
+
+function packingSortKey(item, sortBy) {
+  switch (sortBy) {
+    case 'title': return [item.title.toLowerCase()];
+    case 'bag':
+      // null/empty bag sorts last
+      return [item.bag ? 0 : 1, (item.bag || '').toLowerCase(), item.title.toLowerCase()];
+    case 'priority':
+      return [item.priority == null ? 99 : item.priority, item.title.toLowerCase()];
+    case 'status':
+    default:
+      return [
+        STATUS_ORDER[item.status] ?? 99,
+        item.priority == null ? 99 : item.priority,
+        item.title.toLowerCase(),
+      ];
+  }
+}
+
+function compareKeys(a, b) {
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const x = a[i], y = b[i];
+    if (x === y) continue;
+    if (x === undefined) return -1;
+    if (y === undefined) return 1;
+    return x < y ? -1 : 1;
+  }
+  return 0;
+}
+
+function renderPacking() {
+  persistFilters();
+  const search = document.getElementById('pSearch').value.trim().toLowerCase();
+  const sortBy = document.getElementById('pSort').value;
+  const statusFilter = document.getElementById('pStatusFilter').value;
+
+  let items = packingItems.slice();
+  if (search) {
+    items = items.filter(i => i.title.toLowerCase().includes(search)
+      || (i.bag || '').toLowerCase().includes(search));
+  }
+  if (statusFilter) {
+    items = items.filter(i => i.status === statusFilter);
+  }
+  items.sort((a, b) => compareKeys(packingSortKey(a, sortBy), packingSortKey(b, sortBy)));
+
+  const app = document.getElementById('packingApp');
+  if (!items.length) {
+    if (!packingItems.length) {
+      app.innerHTML = '<div class="empty">No packing items yet. Tap + to add one.</div>';
+    } else {
+      app.innerHTML = '<div class="empty">No items match these filters.</div>';
+    }
+    return;
+  }
+  app.innerHTML = items.map(packingCard).join('');
+}
+
+function statusClass(status) {
+  if (status === 'Need') return 's-need';
+  if (status === 'Have') return 's-have';
+  return 's-packed';
+}
+
+function nextStatusLabel(status) {
+  if (status === 'Need') return 'Got it';
+  if (status === 'Have') return 'Mark as packed';
+  return null;
+}
+
+function packingCard(it) {
+  const advanceLabel = nextStatusLabel(it.status);
+  const advanceBtn = advanceLabel
+    ? `<button class="btn btn-done" onclick="advancePacking('${it.id}')">${advanceLabel}</button>`
+    : '';
+  const prio = it.priority
+    ? `<span class="pill prio-${it.priority}">P${it.priority}</span>` : '';
+  // Bag is optional; when null show only the status.
+  const meta = it.bag
+    ? `${esc(it.bag)} · ${esc(statusDisplay(it.status))}`
+    : esc(statusDisplay(it.status));
+  return `
+    <div class="task pack-card ${statusClass(it.status)}" data-id="${it.id}">
+      <div class="task-body">
+        <div class="task-title">${esc(it.title)}${prio}</div>
+        <div class="task-meta">${meta}</div>
+      </div>
+      <div class="task-actions">
+        ${advanceBtn}
+        <div class="menu-wrap">
+          <button class="menu-btn" onclick="toggleMenu(event)">⋯</button>
+          <div class="menu-dropdown">
+            <button class="menu-item" onclick="openPackEdit('${it.id}')">Edit</button>
+            <button class="menu-item danger" onclick="deletePacking('${it.id}', '${esc(it.title)}')">Delete</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+}
+
+async function advancePacking(id) {
+  await fetch(API + '/packing/items/' + id + '/advance', { method: 'POST' });
+  await loadPacking();
+}
+
+async function deletePacking(id, title) {
+  if (!confirm('Delete "' + title + '"?')) return;
+  await fetch(API + '/packing/items/' + id, { method: 'DELETE' });
+  await loadPacking();
+}
+
+// --- Packing form ---
+const ADD_BAG_SENTINEL = '__add_new_bag__';
+
+function populateBagSelect(selected) {
+  const sel = document.getElementById('pfBag');
+  sel.innerHTML = '';
+  // Empty/no-bag option, always at the top.
+  const noneOpt = document.createElement('option');
+  noneOpt.value = '';
+  noneOpt.textContent = '(none)';
+  sel.appendChild(noneOpt);
+  packingBags.forEach(b => {
+    const opt = document.createElement('option');
+    opt.value = b;
+    opt.textContent = b;
+    sel.appendChild(opt);
+  });
+  const addOpt = document.createElement('option');
+  addOpt.value = ADD_BAG_SENTINEL;
+  addOpt.textContent = '+ Add new bag…';
+  sel.appendChild(addOpt);
+  // Selected may be null/undefined/'' for "no bag", or a bag name.
+  sel.value = selected || '';
+}
+
+async function onBagChange() {
+  const sel = document.getElementById('pfBag');
+  if (sel.value !== ADD_BAG_SENTINEL) return;
+  const name = (prompt('New bag name:') || '').trim();
+  if (!name) {
+    sel.value = '';
+    return;
+  }
+  const res = await fetch(API + '/packing/bags', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+  const data = await res.json();
+  packingBags = data.bags || packingBags;
+  populateBagSelect(name);
+}
+
+function openPackForm() {
+  document.getElementById('packFormTitle').textContent = 'Add Packing Item';
+  document.getElementById('packEditId').value = '';
+  document.getElementById('pfTitle').value = '';
+  document.getElementById('pfStatus').value = 'Have';
+  document.getElementById('pfPriority').value = '';
+  populateBagSelect('');  // default: no bag
+  document.getElementById('packFormOverlay').classList.add('open');
+}
+
+function openPackEdit(id) {
+  document.querySelectorAll('.menu-dropdown.open').forEach(m => m.classList.remove('open'));
+  const it = packingItems.find(x => x.id === id);
+  if (!it) return;
+  document.getElementById('packFormTitle').textContent = 'Edit Packing Item';
+  document.getElementById('packEditId').value = it.id;
+  document.getElementById('pfTitle').value = it.title;
+  document.getElementById('pfStatus').value = it.status;
+  document.getElementById('pfPriority').value = it.priority == null ? '' : String(it.priority);
+  populateBagSelect(it.bag);
+  document.getElementById('packFormOverlay').classList.add('open');
+}
+
+function closePackForm() {
+  document.getElementById('packFormOverlay').classList.remove('open');
+}
+
+async function submitPackForm() {
+  const editId = document.getElementById('packEditId').value;
+  const title = document.getElementById('pfTitle').value.trim();
+  const status = document.getElementById('pfStatus').value;
+  const bagRaw = document.getElementById('pfBag').value;
+  const priorityRaw = document.getElementById('pfPriority').value;
+  if (!title) { alert('Title is required'); return; }
+  // bag is optional; ADD_BAG_SENTINEL means the user opened the new-bag flow
+  // and cancelled — fall back to no bag.
+  const bag = (bagRaw && bagRaw !== ADD_BAG_SENTINEL) ? bagRaw : null;
+  const priority = priorityRaw === '' ? null : parseInt(priorityRaw, 10);
+
+  const body = { title, status, bag, priority };
+
+  if (editId) {
+    await fetch(API + '/packing/items/' + editId, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  } else {
+    await fetch(API + '/packing/items', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  }
+  closePackForm();
+  await loadPacking();
+}
+
+document.getElementById('packFormOverlay').addEventListener('click', e => {
+  if (e.target === e.currentTarget) closePackForm();
+});
+
+// --- CSV import ---
+// Robust CSV parser per RFC 4180: handles quoted fields, embedded commas,
+// escaped quotes (""), CRLF, trailing blank lines.
+function parseCSV(text) {
+  const rows = [];
+  let row = [];
+  let field = '';
+  let inQuotes = false;
+  let i = 0;
+  while (i < text.length) {
+    const c = text[i];
+    if (inQuotes) {
+      if (c === '"') {
+        if (text[i+1] === '"') { field += '"'; i += 2; continue; }
+        inQuotes = false; i++; continue;
+      }
+      field += c; i++;
+    } else {
+      if (c === '"') { inQuotes = true; i++; continue; }
+      if (c === ',') { row.push(field); field = ''; i++; continue; }
+      if (c === '\r') { i++; continue; }
+      if (c === '\n') { row.push(field); rows.push(row); row = []; field = ''; i++; continue; }
+      field += c; i++;
+    }
+  }
+  if (field.length > 0 || row.length > 0) {
+    row.push(field); rows.push(row);
+  }
+  return rows;
+}
+
+function downloadCSVTemplate() {
+  const text =
+    'title,status,bag,priority\n' +
+    'Sunscreen,Need,Orange Suitcase,1\n' +
+    'Passport,Have,Black Tote,\n' +
+    'Snorkel,packed,Green Suitcase,3\n';
+  const blob = new Blob([text], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'packing_template.csv';
+  document.body.appendChild(a); a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+async function onImportFile(event) {
+  const file = event.target.files[0];
+  event.target.value = '';  // allow re-importing same filename later
+  if (!file) return;
+  let text;
+  try {
+    text = await file.text();
+  } catch (e) {
+    alert('Could not read file: ' + e.message);
+    return;
+  }
+  const rows = parseCSV(text);
+  if (!rows.length) { alert('CSV looks empty.'); return; }
+  const header = rows[0].map(h => h.trim().toLowerCase());
+  const required = ['title', 'bag'];
+  const missing = required.filter(c => !header.includes(c));
+  if (missing.length) {
+    alert('CSV missing required column(s): ' + missing.join(', ') +
+          '\nExpected columns: title, status, bag, priority');
+    return;
+  }
+
+  const items = [];
+  for (let i = 1; i < rows.length; i++) {
+    const r = rows[i];
+    if (!r.some(c => c && c.trim())) continue;  // skip blank lines
+    const item = {};
+    header.forEach((h, idx) => {
+      const v = (r[idx] != null ? r[idx] : '').trim();
+      if (v !== '') item[h] = v;
+    });
+    items.push(item);
+  }
+  if (!items.length) { alert('No data rows found in CSV.'); return; }
+
+  if (!confirm(`Import ${items.length} item${items.length === 1 ? '' : 's'} from CSV?`)) return;
+
+  let result;
+  try {
+    const res = await fetch(API + '/packing/items/bulk', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items }),
+    });
+    result = await res.json();
+  } catch (e) {
+    alert('Upload failed: ' + e.message);
+    return;
+  }
+
+  let msg = `Imported ${result.added} item${result.added === 1 ? '' : 's'}.`;
+  if (result.skipped) {
+    const lines = result.errors.slice(0, 10).map(e => `  row ${e.row}: ${e.error}`);
+    msg += `\nSkipped ${result.skipped}:\n` + lines.join('\n');
+    if (result.errors.length > 10) {
+      msg += `\n  …and ${result.errors.length - 10} more.`;
+    }
+  }
+  alert(msg);
+  await loadPacking();
+}
+
+// --- Initial load ---
+switchTab(activeTab);
 </script>
 </body>
 </html>

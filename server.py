@@ -35,6 +35,29 @@ def _get_db() -> sqlite3.Connection:
     return conn
 
 
+PACKING_STATUSES = ["Need", "Have", "packed"]
+PACKING_NEXT_STATUS = {
+    "Need": "Have",
+    "Have": "packed",
+}
+DEFAULT_BAGS = ["Orange Suitcase", "Green Suitcase", "Black Tote"]
+
+
+def _canonical_status(s):
+    """Case-insensitive lookup. Returns the canonical PACKING_STATUSES value or None."""
+    if not isinstance(s, str):
+        return None
+    lower = s.strip().lower()
+    # Accept legacy values too so old API clients keep working.
+    legacy = {"need to buy": "Need", "need to pack": "Have"}
+    if lower in legacy:
+        return legacy[lower]
+    for canonical in PACKING_STATUSES:
+        if canonical.lower() == lower:
+            return canonical
+    return None
+
+
 def _init_db() -> None:
     conn = _get_db()
     conn.execute("""
@@ -59,6 +82,90 @@ def _init_db() -> None:
         conn.execute("ALTER TABLE tasks ADD COLUMN due_date TEXT")
     except sqlite3.OperationalError:
         pass  # column already exists
+
+    # Packing list tables
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS packing_bags (
+            name TEXT PRIMARY KEY,
+            sort_order INTEGER NOT NULL DEFAULT 0
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS packing_items (
+            id TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            status TEXT NOT NULL CHECK(status IN ('Need', 'Have', 'packed')),
+            bag TEXT,
+            priority INTEGER,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL
+        )
+    """)
+
+    # Migration: rebuild packing_items if it has either the old status CHECK
+    # constraint or a NOT NULL bag column. Both renames are applied in a single
+    # rebuild so the server converges from any earlier state in one boot.
+    schema_row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='packing_items'"
+    ).fetchone()
+    schema_sql = schema_row[0] if schema_row else ""
+    needs_rebuild = (
+        "'need to buy'" in schema_sql
+        or "'need to pack'" in schema_sql
+        or "bag TEXT NOT NULL" in schema_sql
+    )
+    if needs_rebuild:
+        conn.execute("ALTER TABLE packing_items RENAME TO packing_items_old")
+        conn.execute("""
+            CREATE TABLE packing_items (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                status TEXT NOT NULL CHECK(status IN ('Need', 'Have', 'packed')),
+                bag TEXT,
+                priority INTEGER,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL
+            )
+        """)
+        conn.execute("""
+            INSERT INTO packing_items (id, title, status, bag, priority, sort_order, created_at)
+            SELECT id, title,
+                CASE status
+                    WHEN 'need to buy'  THEN 'Need'
+                    WHEN 'need to pack' THEN 'Have'
+                    ELSE status
+                END,
+                bag, priority, sort_order, created_at
+            FROM packing_items_old
+        """)
+        conn.execute("DROP TABLE packing_items_old")
+
+    # Migration: rename old default bags to the new canonical names.
+    bag_renames = [
+        ("Green", "Green Suitcase"),
+        ("Orange", "Orange Suitcase"),
+        ("Carry-on Tote", "Black Tote"),
+    ]
+    for old, new in bag_renames:
+        if not conn.execute("SELECT 1 FROM packing_bags WHERE name = ?", (old,)).fetchone():
+            continue
+        if conn.execute("SELECT 1 FROM packing_bags WHERE name = ?", (new,)).fetchone():
+            # Both exist: merge items, drop the old row.
+            conn.execute("UPDATE packing_items SET bag = ? WHERE bag = ?", (new, old))
+            conn.execute("DELETE FROM packing_bags WHERE name = ?", (old,))
+        else:
+            # Only old exists: rename in both tables.
+            conn.execute("UPDATE packing_items SET bag = ? WHERE bag = ?", (new, old))
+            conn.execute("UPDATE packing_bags SET name = ? WHERE name = ?", (new, old))
+
+    # Seed default bags if empty (fresh installs).
+    existing = conn.execute("SELECT COUNT(*) FROM packing_bags").fetchone()[0]
+    if existing == 0:
+        for i, name in enumerate(DEFAULT_BAGS):
+            conn.execute(
+                "INSERT INTO packing_bags (name, sort_order) VALUES (?, ?)",
+                (name, i),
+            )
     conn.commit()
     conn.close()
 
@@ -322,3 +429,221 @@ def get_summary() -> str:
             lines.append(f"Most overdue: **{most_overdue['title']}** (never completed)")
 
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Packing helpers
+# ---------------------------------------------------------------------------
+def _format_packing_item(row: sqlite3.Row) -> dict:
+    return {
+        "id": row["id"],
+        "title": row["title"],
+        "status": row["status"],
+        "bag": row["bag"],
+        "priority": row["priority"],
+        "sort_order": row["sort_order"],
+        "created_at": row["created_at"],
+    }
+
+
+def _list_bags(conn) -> list[str]:
+    rows = conn.execute("SELECT name FROM packing_bags ORDER BY sort_order, name").fetchall()
+    return [r["name"] for r in rows]
+
+
+def _ensure_bag(conn, bag: str) -> None:
+    """Insert bag if it doesn't exist."""
+    existing = conn.execute("SELECT 1 FROM packing_bags WHERE name = ?", (bag,)).fetchone()
+    if not existing:
+        max_order = conn.execute("SELECT COALESCE(MAX(sort_order), -1) FROM packing_bags").fetchone()[0]
+        conn.execute(
+            "INSERT INTO packing_bags (name, sort_order) VALUES (?, ?)",
+            (bag, max_order + 1),
+        )
+
+
+# ---------------------------------------------------------------------------
+# Packing MCP Tools
+# ---------------------------------------------------------------------------
+@mcp.tool()
+def list_packing_items() -> str:
+    """List all Bahamas packing items grouped by status."""
+    conn = _get_db()
+    rows = conn.execute(
+        "SELECT * FROM packing_items ORDER BY status, COALESCE(priority, 99), title"
+    ).fetchall()
+    conn.close()
+    if not rows:
+        return "No packing items yet."
+    lines = []
+    current = None
+    for r in rows:
+        item = _format_packing_item(r)
+        if item["status"] != current:
+            current = item["status"]
+            lines.append(f"\n## {current}")
+        prio = f" P{item['priority']}" if item["priority"] else ""
+        lines.append(f"- **{item['title']}** [{item['bag']}]{prio}  id: `{item['id']}`")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def add_packing_item(
+    title: str,
+    bag: Optional[str] = None,
+    status: str = "Have",
+    priority: Optional[int] = None,
+) -> str:
+    """Add a new packing item. Only title is required.
+
+    Args:
+        title: Item name (required)
+        bag: Optional. Which bag (e.g. "Orange Suitcase", "Green Suitcase", "Black Tote", or a custom one).
+        status: Optional. One of: "Need", "Have", "packed". Defaults to "Have".
+        priority: Optional priority — 1, 2, or 3.
+    """
+    title = (title or "").strip()
+    if not title:
+        return "title is required."
+    canonical = _canonical_status(status)
+    if canonical is None:
+        return f"Invalid status. Must be one of: {', '.join(PACKING_STATUSES)}."
+    status = canonical
+    if priority is not None and priority not in (1, 2, 3):
+        return "priority must be 1, 2, 3, or omitted."
+    bag = bag.strip() if isinstance(bag, str) and bag.strip() else None
+
+    item_id = str(uuid.uuid4())[:8]
+    conn = _get_db()
+    if bag:
+        _ensure_bag(conn, bag)
+    max_order = conn.execute("SELECT COALESCE(MAX(sort_order), 0) FROM packing_items").fetchone()[0]
+    conn.execute(
+        "INSERT INTO packing_items (id, title, status, bag, priority, sort_order, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (item_id, title, status, bag, priority, max_order + 1, _now_iso()),
+    )
+    conn.commit()
+    conn.close()
+    where = f" to {bag}" if bag else ""
+    return f"Added '{title}'{where} ({status}). ID: {item_id}"
+
+
+@mcp.tool()
+def edit_packing_item(
+    item_id: str,
+    title: Optional[str] = None,
+    status: Optional[str] = None,
+    bag: Optional[str] = None,
+    priority: Optional[int] = None,
+) -> str:
+    """Edit a packing item. Provide only fields you want to change.
+
+    To clear priority, pass priority=0.
+    """
+    conn = _get_db()
+    row = conn.execute("SELECT * FROM packing_items WHERE id = ?", (item_id,)).fetchone()
+    if not row:
+        conn.close()
+        return f"No packing item with ID '{item_id}'."
+
+    updates, values = [], []
+    if title is not None:
+        updates.append("title = ?")
+        values.append(title.strip())
+    if status is not None:
+        canonical = _canonical_status(status)
+        if canonical is None:
+            conn.close()
+            return f"Invalid status. Must be one of: {', '.join(PACKING_STATUSES)}."
+        updates.append("status = ?")
+        values.append(canonical)
+    if bag is not None:
+        bag_clean = bag.strip() if isinstance(bag, str) else None
+        if bag_clean:
+            _ensure_bag(conn, bag_clean)
+            updates.append("bag = ?")
+            values.append(bag_clean)
+        else:
+            # Empty string clears the bag.
+            updates.append("bag = ?")
+            values.append(None)
+    if priority is not None:
+        if priority == 0:
+            updates.append("priority = ?")
+            values.append(None)
+        elif priority in (1, 2, 3):
+            updates.append("priority = ?")
+            values.append(priority)
+        else:
+            conn.close()
+            return "priority must be 1, 2, 3, or 0 to clear."
+
+    if not updates:
+        conn.close()
+        return "Nothing to update."
+
+    values.append(item_id)
+    conn.execute(f"UPDATE packing_items SET {', '.join(updates)} WHERE id = ?", values)
+    conn.commit()
+    conn.close()
+    return f"Updated packing item '{item_id}'."
+
+
+@mcp.tool()
+def advance_packing_status(item_id: str) -> str:
+    """Move a packing item to the next status.
+
+    need to buy -> need to pack -> packed.
+    """
+    conn = _get_db()
+    row = conn.execute("SELECT * FROM packing_items WHERE id = ?", (item_id,)).fetchone()
+    if not row:
+        conn.close()
+        return f"No packing item with ID '{item_id}'."
+    current = row["status"]
+    nxt = PACKING_NEXT_STATUS.get(current)
+    if nxt is None:
+        conn.close()
+        return f"'{row['title']}' is already packed."
+    conn.execute("UPDATE packing_items SET status = ? WHERE id = ?", (nxt, item_id))
+    conn.commit()
+    conn.close()
+    return f"'{row['title']}': {current} -> {nxt}"
+
+
+@mcp.tool()
+def delete_packing_item(item_id: str, confirm: bool = False) -> str:
+    """Delete a packing item permanently."""
+    if not confirm:
+        return "Set confirm=True to delete this item."
+    conn = _get_db()
+    row = conn.execute("SELECT * FROM packing_items WHERE id = ?", (item_id,)).fetchone()
+    if not row:
+        conn.close()
+        return f"No packing item with ID '{item_id}'."
+    conn.execute("DELETE FROM packing_items WHERE id = ?", (item_id,))
+    conn.commit()
+    conn.close()
+    return f"Deleted '{row['title']}'."
+
+
+@mcp.tool()
+def list_packing_bags() -> str:
+    """List the available packing bag categories."""
+    conn = _get_db()
+    bags = _list_bags(conn)
+    conn.close()
+    return ", ".join(bags) if bags else "No bags yet."
+
+
+@mcp.tool()
+def add_packing_bag(name: str) -> str:
+    """Add a new packing bag category."""
+    name = name.strip()
+    if not name:
+        return "Bag name is required."
+    conn = _get_db()
+    _ensure_bag(conn, name)
+    conn.commit()
+    conn.close()
+    return f"Bag '{name}' available."

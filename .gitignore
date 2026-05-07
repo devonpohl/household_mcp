@@ -6,3 +6,4 @@ __pycache__/
 credentials.json
 token.json
 run-local.sh
+.fuse_hidden*

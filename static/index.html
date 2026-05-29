@@ -224,8 +224,8 @@
 </head>
 <body>
 
-<!-- Tabs -->
-<div class="tabs-bar">
+<!-- Tabs (hidden — flip PACKING_VISIBLE to true in the script to re-enable) -->
+<div class="tabs-bar" id="tabsBar" style="display:none;">
   <button class="tab-btn active" id="tab-household" onclick="switchTab('household')">Household Tasks</button>
   <button class="tab-btn" id="tab-packing" onclick="switchTab('packing')">Bahamas Packing</button>
 </div>
@@ -236,7 +236,7 @@
   <div id="app"><div class="empty">Loading…</div></div>
 </div>
 
-<!-- Packing tab content -->
+<!-- Packing tab content (hidden alongside the tabs bar) -->
 <div id="view-packing" style="display:none;">
   <div class="filter-bar">
     <input type="text" id="pSearch" placeholder="Search packing items…" oninput="renderPacking()">
@@ -321,7 +321,11 @@
 <script>
 const API = window.location.origin + '/api';
 
+// Flip to true to bring the Bahamas Packing tab back next trip.
+const PACKING_VISIBLE = false;
+
 let activeTab = localStorage.getItem('activeTab') || 'household';
+if (!PACKING_VISIBLE) activeTab = 'household';
 let packingItems = [];
 let packingBags = [];
 
@@ -334,8 +338,10 @@ document.addEventListener('click', e => {
 
 // --- Tab switching ---
 function switchTab(tab) {
+  if (tab === 'packing' && !PACKING_VISIBLE) tab = 'household';
   activeTab = tab;
   localStorage.setItem('activeTab', tab);
+  document.getElementById('tabsBar').style.display = PACKING_VISIBLE ? '' : 'none';
   document.getElementById('tab-household').classList.toggle('active', tab === 'household');
   document.getElementById('tab-packing').classList.toggle('active', tab === 'packing');
   document.getElementById('view-household').style.display = tab === 'household' ? '' : 'none';

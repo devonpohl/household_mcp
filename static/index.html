@@ -139,6 +139,14 @@
   .btn-primary { background: #1976d2; color: #fff; padding: 8px 16px; font-size: 1em; }
   .btn-primary:hover { background: #1565c0; }
   .btn-cancel { background: #e0e0e0; color: #333; padding: 8px 16px; font-size: 1em; }
+  .btn-danger { background: #d32f2f; color: #fff; padding: 8px 16px; font-size: 1em; }
+  .btn-danger:hover { background: #b71c1c; }
+  .btn-reset {
+    background: #f3d6d6; color: #b00020; border: none; border-radius: 6px;
+    padding: 8px 10px; font-size: 0.85em; cursor: pointer;
+    flex: 0 0 auto; white-space: nowrap;
+  }
+  .btn-reset:hover { background: #ebbcbc; }
 
   .task-actions { display: flex; gap: 6px; align-items: center; flex-shrink: 0; align-self: stretch; }
   .btn-done { align-self: stretch; display: flex; align-items: center; }
@@ -254,6 +262,7 @@
         <option value="packed">Packed</option>
       </select>
       <button class="btn-clear" onclick="clearFilters()">Clear</button>
+      <button class="btn-reset" onclick="openResetAll()">Reset all</button>
     </div>
   </div>
   <div id="packingApp"><div class="empty">Loading…</div></div>
@@ -314,6 +323,21 @@
     <div class="form-actions">
       <button class="btn btn-cancel" onclick="closePackForm()">Cancel</button>
       <button class="btn btn-primary" onclick="submitPackForm()">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Reset all confirmation -->
+<div class="form-overlay" id="resetAllOverlay">
+  <div class="form-box">
+    <h2>Reset all items?</h2>
+    <p style="margin:0 0 8px; color:#444; font-size:0.95em;">
+      This resets <strong>status</strong>, <strong>bag</strong>, and <strong>priority</strong>
+      for every packing item. Item titles are kept. This can't be undone.
+    </p>
+    <div class="form-actions">
+      <button class="btn btn-cancel" onclick="closeResetAll()">Cancel</button>
+      <button class="btn btn-danger" id="resetAllConfirmBtn" onclick="confirmResetAll()">Reset all</button>
     </div>
   </div>
 </div>
@@ -674,6 +698,35 @@ function clearFilters() {
   document.getElementById('pStatusFilter').value = '';
   persistFilters();
   renderPacking();
+}
+
+// --- Reset all packing items ---
+function openResetAll() {
+  document.getElementById('resetAllOverlay').classList.add('open');
+}
+function closeResetAll() {
+  document.getElementById('resetAllOverlay').classList.remove('open');
+}
+async function confirmResetAll() {
+  const btn = document.getElementById('resetAllConfirmBtn');
+  btn.disabled = true;
+  btn.textContent = 'Resetting…';
+  try {
+    await Promise.all(packingItems.map(it =>
+      fetch(API + '/packing/items/' + it.id, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'Need', bag: null, priority: null }),
+      })
+    ));
+    closeResetAll();
+    await loadPacking();
+  } catch (e) {
+    alert('Reset failed: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Reset all';
+  }
 }
 
 const STATUS_ORDER = { 'Need': 0, 'Have': 1, 'packed': 2 };

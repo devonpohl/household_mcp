@@ -467,7 +467,7 @@ def _ensure_bag(conn, bag: str) -> None:
 # ---------------------------------------------------------------------------
 @mcp.tool()
 def list_packing_items() -> str:
-    """List all Michigan packing items grouped by status."""
+    """List all Bahamas packing items grouped by status."""
     conn = _get_db()
     rows = conn.execute(
         "SELECT * FROM packing_items ORDER BY status, COALESCE(priority, 99), title"

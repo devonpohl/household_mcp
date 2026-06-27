@@ -227,7 +227,7 @@
 <!-- Tabs (hidden — flip PACKING_VISIBLE to true in the script to re-enable) -->
 <div class="tabs-bar" id="tabsBar" style="display:none;">
   <button class="tab-btn active" id="tab-household" onclick="switchTab('household')">Household Tasks</button>
-  <button class="tab-btn" id="tab-packing" onclick="switchTab('packing')">Bahamas Packing</button>
+  <button class="tab-btn" id="tab-packing" onclick="switchTab('packing')">Michigan Packing</button>
 </div>
 
 <!-- Household tab content -->
@@ -321,7 +321,7 @@
 <script>
 const API = window.location.origin + '/api';
 
-// Flip to true to bring the Bahamas Packing tab back next trip.
+// Flip to true to bring the Michigan Packing tab back next trip.
 const PACKING_VISIBLE = true;
 
 let activeTab = localStorage.getItem('activeTab') || 'household';
